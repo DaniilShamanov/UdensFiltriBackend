@@ -1,0 +1,3 @@
+Admin notification: Order #{{ order.id }} has been paid.
+User: {{ order.user.phone }}
+Total: {{ order.total_cents }} {{ order.currency }}

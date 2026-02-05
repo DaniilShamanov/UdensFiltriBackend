@@ -1,0 +1,12 @@
+Hello,
+
+We have received your payment for Order #{{ order.id }}.
+
+Order summary:
+{% for item in order.items %}
+- {{ item.name }} x {{ item.qty }}
+{% endfor %}
+
+Total: {{ order.total_cents }} {{ order.currency }}
+
+Thank you.
