@@ -71,11 +71,11 @@ WSGI_APPLICATION = "config.wsgi.application"
 DATABASES = {
     "default": {
         "ENGINE": "django.db.backends.postgresql",
-        "NAME": env("DB_NAME", "plumbing"),
-        "USER": env("DB_USER", "plumbing"),
-        "PASSWORD": env("DB_PASSWORD", "plumbing"),
+        "NAME": env("DB_NAME", "UdensFiltri"),
+        "USER": env("DB_USER", "postgres"),
+        "PASSWORD": env("DB_PASSWORD", ""),
         "HOST": env("DB_HOST", "localhost"),
-        "PORT": env("DB_PORT", "5432"),
+        "PORT": env("DB_PORT", "5433")
     }
 }
 
@@ -102,7 +102,6 @@ CORS_ALLOWED_ORIGINS = FRONTEND_ORIGINS
 CORS_ALLOW_CREDENTIALS = True
 CSRF_TRUSTED_ORIGINS = [o for o in FRONTEND_ORIGINS if o.startswith("https://") or o.startswith("http://")]
 
-
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ("apps.accounts.auth.CookieJWTAuthentication",),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticatedOrReadOnly",),
@@ -113,8 +112,8 @@ REST_FRAMEWORK = {
 }
 
 SIMPLE_JWT = {
-    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=15),
-    "REFRESH_TOKEN_LIFETIME": timedelta(days=7),
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=1),
+    "REFRESH_TOKEN_LIFETIME": timedelta(minutes=3),
     "ROTATE_REFRESH_TOKENS": True,
     "BLACKLIST_AFTER_ROTATION": False,
     "AUTH_HEADER_TYPES": ("Bearer",),

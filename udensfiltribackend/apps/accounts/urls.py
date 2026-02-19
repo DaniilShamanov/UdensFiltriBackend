@@ -1,5 +1,6 @@
 from django.urls import path
 from . import views
+from .views import CookieTokenRefreshView
 
 urlpatterns = [
     path("request-sms-code/", views.request_sms_code),
@@ -12,4 +13,5 @@ urlpatterns = [
     path("change-email/", views.change_email),
     path("change-phone/", views.change_phone),
     path("change-password/", views.change_password),
+    path('api/auth/refresh/', CookieTokenRefreshView.as_view(), name='token_refresh'),
 ]

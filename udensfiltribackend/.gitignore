@@ -1,0 +1,71 @@
+# Python bytecode / cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+.env/
+.venv/
+ENV/
+
+# Database
+*.sqlite3
+*.db
+*.sqlite
+
+# Media files (user uploads – do not commit)
+/media/
+
+# Static files collected with `collectstatic`
+/staticfiles/
+/static_collected/
+
+# Environment variables (sensitive data)
+.env
+.env.local
+.env.*.local
+!.env.example  # allow committing example file
+
+# Secret key files (if you store them in a file)
+.secret_key
+local_settings.py
+settings_local.py
+
+# Logs
+*.log
+logs/
+
+# IDE / editor folders
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Django project specific (optional)
+# If you have a dedicated folder for collected static
+# staticfiles/
+
+# Celery beat schedule (if you use Celery)
+celerybeat-schedule
+
+# Uploads (if using a library like django-storages)
+uploads/
+
+# pip / pipenv / poetry files
+Pipfile.lock
+poetry.lock

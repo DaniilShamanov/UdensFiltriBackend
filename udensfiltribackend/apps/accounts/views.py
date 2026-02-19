@@ -1,11 +1,14 @@
 from django.http import JsonResponse
 from django.middleware.csrf import get_token
 from django.utils import timezone
+from django.conf import settings
 from datetime import timedelta
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
+from rest_framework_simplejwt.views import TokenRefreshView
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 
 from .serializers import (
     RequestSMSCodeSerializer, RegisterSerializer, LoginSerializer,
@@ -207,3 +210,33 @@ def change_password(request):
     resp = Response({"ok": True})
     clear_auth_cookies(resp)
     return resp
+
+class CookieTokenRefreshSerializer(TokenRefreshSerializer):
+    refresh = None  # disable the default field validation
+
+    def validate(self, attrs):
+        request = self.context['request']
+        refresh_token = request.COOKIES.get(settings.AUTH_COOKIE_REFRESH_NAME)
+        if not refresh_token:
+            raise serializers.ValidationError('No refresh token found in cookies.')
+        attrs['refresh'] = refresh_token
+        return super().validate(attrs)
+
+class CookieTokenRefreshView(TokenRefreshView):
+    serializer_class = CookieTokenRefreshSerializer
+
+    def post(self, request, *args, **kwargs):
+        serializer = self.get_serializer(data=request.data)
+        try:
+            serializer.is_valid(raise_exception=True)
+        except Exception as e:
+            return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
+
+        response = Response(serializer.validated_data, status=status.HTTP_200_OK)
+        # Set new cookies (access and possibly refresh)
+        set_auth_cookies(
+            response,
+            serializer.validated_data['access'],
+            serializer.validated_data.get('refresh', '')  # if rotation is on
+        )
+        return response

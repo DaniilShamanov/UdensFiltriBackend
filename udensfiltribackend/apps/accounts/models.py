@@ -79,4 +79,3 @@ class SMSCode(models.Model):
     def consume(self):
         self.consumed_at = timezone.now()
         self.save(update_fields=["consumed_at"])
-
