@@ -5,10 +5,8 @@ from datetime import timedelta
 
 
 class UserManager(BaseUserManager):
-    def create_user(self, phone: str, password=None, **extra_fields):
-        if not phone:
-            raise ValueError("Phone is required")
-        user = self.model(phone=phone.strip(), **extra_fields)
+    def create_user(self, phone: str = "", password=None, **extra_fields):
+        user = self.model(phone=(phone or "").strip() or None, **extra_fields)
         user.set_password(password)
         user.save(using=self._db)
         return user
@@ -21,7 +19,7 @@ class UserManager(BaseUserManager):
 
 
 class User(AbstractBaseUser, PermissionsMixin):
-    phone = models.CharField(max_length=32, unique=True)
+    phone = models.CharField(max_length=32, unique=True, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
     first_name = models.CharField(max_length=150, blank=True, default="")
     last_name = models.CharField(max_length=150, blank=True, default="")
@@ -35,10 +33,10 @@ class User(AbstractBaseUser, PermissionsMixin):
     REQUIRED_FIELDS = []
 
     def __str__(self):
-        return self.phone
+        return self.phone or self.email or f"User #{self.pk}"
 
 
-class SMSCode(models.Model):
+class EmailCode(models.Model):
     PURPOSE_CHOICES = [
         ("register", "register"),
         ("change_email", "change_email"),
@@ -46,7 +44,7 @@ class SMSCode(models.Model):
         ("change_password", "change_password"),
     ]
 
-    phone = models.CharField(max_length=32)
+    email = models.EmailField()
     purpose = models.CharField(max_length=32, choices=PURPOSE_CHOICES)
     code = models.CharField(max_length=6)
 
@@ -60,8 +58,8 @@ class SMSCode(models.Model):
 
     class Meta:
         indexes = [
-            models.Index(fields=["phone", "purpose", "created_at"]),
-            models.Index(fields=["phone", "purpose", "code"]),
+            models.Index(fields=["email", "purpose", "created_at"]),
+            models.Index(fields=["email", "purpose", "code"]),
         ]
 
     @property

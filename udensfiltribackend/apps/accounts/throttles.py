@@ -1,22 +1,21 @@
 from rest_framework.throttling import SimpleRateThrottle
 
 
-class SMSIPThrottle(SimpleRateThrottle):
-    scope = "sms_ip"
+class CodeIPThrottle(SimpleRateThrottle):
+    scope = "code_ip"
 
     def get_cache_key(self, request, view):
         ident = self.get_ident(request)
         return self.cache_format % {"scope": self.scope, "ident": ident}
 
 
-class SMSPhoneThrottle(SimpleRateThrottle):
-    scope = "sms_phone"
+class CodeEmailThrottle(SimpleRateThrottle):
+    scope = "code_email"
 
     def get_cache_key(self, request, view):
-        phone = (request.data.get("phone") or "").strip()
-        # If purpose requires auth, phone might be empty; fall back to user phone.
-        if not phone and getattr(request, "user", None) and request.user.is_authenticated:
-            phone = request.user.phone
-        if not phone:
+        email = (request.data.get("email") or "").strip().lower()
+        if not email and getattr(request, "user", None) and request.user.is_authenticated:
+            email = (request.user.email or "").lower()
+        if not email:
             return None
-        return self.cache_format % {"scope": self.scope, "ident": phone}
+        return self.cache_format % {"scope": self.scope, "ident": email}

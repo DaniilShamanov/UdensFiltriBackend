@@ -3,7 +3,8 @@ from . import views
 from .views import CookieTokenRefreshView
 
 urlpatterns = [
-    path("request-sms-code/", views.request_sms_code),
+    path("request-email-code/", views.request_email_code),
+    path("request-sms-code/", views.request_email_code),
     path("register/", views.register),
     path("login/", views.login),
     path("refresh/", views.refresh),

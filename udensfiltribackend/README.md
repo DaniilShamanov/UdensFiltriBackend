@@ -1,6 +1,6 @@
 # Plumbing Backend (Django + DRF + Postgres)
 
-Includes: phone-first auth with SMS verification, JWT cookies, Stripe + webhook, optional email receipts,
+Includes: auth with email verification codes, JWT cookies, Stripe + webhook, optional email receipts,
 catalog, cases (equipment + chat), blog, admin panel, and unit tests.
 
 ## Setup
