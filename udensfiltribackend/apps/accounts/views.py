@@ -1,24 +1,32 @@
+from datetime import timedelta
+from typing import Optional
+
+from django.conf import settings
 from django.http import JsonResponse
 from django.middleware.csrf import get_token
 from django.utils import timezone
-from django.conf import settings
-from datetime import timedelta
+from rest_framework import serializers, status
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 from rest_framework_simplejwt.tokens import RefreshToken
 from rest_framework_simplejwt.views import TokenRefreshView
-from rest_framework_simplejwt.serializers import TokenRefreshSerializer
 
+from .auth import clear_auth_cookies, set_auth_cookies
+from .models import EmailCode, User
 from .serializers import (
-    RequestSMSCodeSerializer, RegisterSerializer, LoginSerializer,
-    UserSerializer, ProfileUpdateSerializer,
-    ChangeEmailSerializer, ChangePhoneSerializer, ChangePasswordSerializer
+    ChangeEmailSerializer,
+    ChangePasswordSerializer,
+    ChangePhoneSerializer,
+    LoginSerializer,
+    ProfileUpdateSerializer,
+    RegisterSerializer,
+    RequestEmailCodeSerializer,
+    UserSerializer,
 )
-from .models import SMSCode, User
-from .utils import create_sms_code, send_sms, normalize_phone
-from .auth import set_auth_cookies, clear_auth_cookies
-from .throttles import SMSIPThrottle, SMSPhoneThrottle
+from .throttles import CodeEmailThrottle, CodeIPThrottle
+from .utils import create_email_code, send_verification_email
 
 
 @api_view(["GET"])
@@ -33,23 +41,16 @@ def _issue_tokens(user: User):
     return str(refresh.access_token), str(refresh)
 
 
-from typing import Optional
-
-
-def _get_latest_active_code(phone: str, purpose: str) -> Optional[SMSCode]:
+def _get_latest_active_code(email: str, purpose: str) -> Optional[EmailCode]:
     return (
-        SMSCode.objects.filter(phone=phone, purpose=purpose, consumed_at__isnull=True)
+        EmailCode.objects.filter(email=email, purpose=purpose, consumed_at__isnull=True)
         .order_by("-created_at")
         .first()
     )
 
 
-def _verify_and_consume_code(phone: str, purpose: str, code: str):
-    """Verify and consume the latest active code.
-
-    Adds basic lockout after too many wrong attempts to reduce brute forcing.
-    """
-    obj = _get_latest_active_code(phone, purpose)
+def _verify_and_consume_code(email: str, purpose: str, code: str):
+    obj = _get_latest_active_code(email, purpose)
     if not obj:
         return False, "missing"
     if timezone.now() >= obj.expires_at:
@@ -58,7 +59,6 @@ def _verify_and_consume_code(phone: str, purpose: str, code: str):
         return False, "locked"
     if obj.code != code:
         obj.failed_attempts += 1
-        # Lock for 15 minutes after 5 failed attempts.
         if obj.failed_attempts >= 5:
             obj.locked_until = timezone.now() + timedelta(minutes=15)
         obj.save(update_fields=["failed_attempts", "locked_until"])
@@ -69,17 +69,17 @@ def _verify_and_consume_code(phone: str, purpose: str, code: str):
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
-@throttle_classes([SMSIPThrottle, SMSPhoneThrottle])
-def request_sms_code(request):
-    ser = RequestSMSCodeSerializer(data=request.data, context={"request": request})
+@throttle_classes([CodeIPThrottle, CodeEmailThrottle])
+def request_email_code(request):
+    ser = RequestEmailCodeSerializer(data=request.data, context={"request": request})
     ser.is_valid(raise_exception=True)
-    phone = ser.validated_data["phone"]
+    email = ser.validated_data["email"]
     purpose = ser.validated_data["purpose"]
     try:
-        sms = create_sms_code(phone, purpose)
+        code_obj = create_email_code(email, purpose)
     except ValueError as exc:
         return Response({"detail": str(exc)}, status=429)
-    send_sms(phone, f"Your verification code is: {sms.code}")
+    send_verification_email(email, code_obj.code)
     return Response({"ok": True})
 
 
@@ -88,16 +88,19 @@ def request_sms_code(request):
 def register(request):
     ser = RegisterSerializer(data=request.data)
     ser.is_valid(raise_exception=True)
-    phone = ser.validated_data["phone"]
-    ok, reason = _verify_and_consume_code(phone, "register", ser.validated_data["code"])
+    email = ser.validated_data["email"].lower()
+    ok, reason = _verify_and_consume_code(email, "register", ser.validated_data["code"])
     if not ok:
         status_code = 429 if reason == "locked" else 400
         return Response({"detail": "Invalid or expired code"}, status=status_code)
 
+    if User.objects.filter(email__iexact=email).exists():
+        return Response({"detail": "User with this email already exists"}, status=400)
+
     user = User.objects.create_user(
-        phone=phone,
+        phone=ser.validated_data.get("phone"),
         password=ser.validated_data["password"],
-        email=ser.validated_data.get("email") or None,
+        email=email,
         first_name=ser.validated_data.get("first_name", ""),
         last_name=ser.validated_data.get("last_name", ""),
     )
@@ -128,7 +131,7 @@ def refresh(request):
     try:
         token = RefreshToken(refresh_cookie)
         new_access = str(token.access_token)
-        new_refresh = str(token)  # rotate by default in SIMPLE_JWT
+        new_refresh = str(token)
         resp = Response({"ok": True})
         set_auth_cookies(resp, new_access, new_refresh)
         return resp
@@ -167,13 +170,15 @@ def profile(request):
 def change_email(request):
     ser = ChangeEmailSerializer(data=request.data)
     ser.is_valid(raise_exception=True)
-    phone = normalize_phone(request.user.phone)
-    ok, reason = _verify_and_consume_code(phone, "change_email", ser.validated_data["code"])
+    if not request.user.email:
+        return Response({"detail": "User email is not set"}, status=400)
+
+    ok, reason = _verify_and_consume_code(request.user.email.lower(), "change_email", ser.validated_data["code"])
     if not ok:
         status_code = 429 if reason == "locked" else 400
         return Response({"detail": "Invalid or expired code"}, status=status_code)
 
-    request.user.email = ser.validated_data.get("email") or None
+    request.user.email = (ser.validated_data.get("email") or "").strip() or None
     request.user.save(update_fields=["email"])
     return Response({"user": UserSerializer(request.user).data})
 
@@ -183,13 +188,15 @@ def change_email(request):
 def change_phone(request):
     ser = ChangePhoneSerializer(data=request.data)
     ser.is_valid(raise_exception=True)
-    new_phone = ser.validated_data["new_phone"]
-    ok, reason = _verify_and_consume_code(new_phone, "change_phone", ser.validated_data["code"])
+    if not request.user.email:
+        return Response({"detail": "User email is not set"}, status=400)
+
+    ok, reason = _verify_and_consume_code(request.user.email.lower(), "change_phone", ser.validated_data["code"])
     if not ok:
         status_code = 429 if reason == "locked" else 400
         return Response({"detail": "Invalid or expired code"}, status=status_code)
 
-    request.user.phone = new_phone
+    request.user.phone = ser.validated_data.get("new_phone")
     request.user.save(update_fields=["phone"])
     return Response({"user": UserSerializer(request.user).data})
 
@@ -199,8 +206,10 @@ def change_phone(request):
 def change_password(request):
     ser = ChangePasswordSerializer(data=request.data)
     ser.is_valid(raise_exception=True)
-    phone = normalize_phone(request.user.phone)
-    ok, reason = _verify_and_consume_code(phone, "change_password", ser.validated_data["code"])
+    if not request.user.email:
+        return Response({"detail": "User email is not set"}, status=400)
+
+    ok, reason = _verify_and_consume_code(request.user.email.lower(), "change_password", ser.validated_data["code"])
     if not ok:
         status_code = 429 if reason == "locked" else 400
         return Response({"detail": "Invalid or expired code"}, status=status_code)
@@ -211,16 +220,18 @@ def change_password(request):
     clear_auth_cookies(resp)
     return resp
 
+
 class CookieTokenRefreshSerializer(TokenRefreshSerializer):
-    refresh = None  # disable the default field validation
+    refresh = None
 
     def validate(self, attrs):
-        request = self.context['request']
+        request = self.context["request"]
         refresh_token = request.COOKIES.get(settings.AUTH_COOKIE_REFRESH_NAME)
         if not refresh_token:
-            raise serializers.ValidationError('No refresh token found in cookies.')
-        attrs['refresh'] = refresh_token
+            raise serializers.ValidationError("No refresh token found in cookies.")
+        attrs["refresh"] = refresh_token
         return super().validate(attrs)
+
 
 class CookieTokenRefreshView(TokenRefreshView):
     serializer_class = CookieTokenRefreshSerializer
@@ -230,13 +241,12 @@ class CookieTokenRefreshView(TokenRefreshView):
         try:
             serializer.is_valid(raise_exception=True)
         except Exception as e:
-            return Response({'detail': str(e)}, status=status.HTTP_401_UNAUTHORIZED)
+            return Response({"detail": str(e)}, status=status.HTTP_401_UNAUTHORIZED)
 
         response = Response(serializer.validated_data, status=status.HTTP_200_OK)
-        # Set new cookies (access and possibly refresh)
         set_auth_cookies(
             response,
-            serializer.validated_data['access'],
-            serializer.validated_data.get('refresh', '')  # if rotation is on
+            serializer.validated_data["access"],
+            serializer.validated_data.get("refresh", ""),
         )
         return response

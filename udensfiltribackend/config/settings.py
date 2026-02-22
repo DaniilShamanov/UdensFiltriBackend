@@ -75,7 +75,7 @@ DATABASES = {
         "USER": env("DB_USER", "postgres"),
         "PASSWORD": env("DB_PASSWORD", ""),
         "HOST": env("DB_HOST", "localhost"),
-        "PORT": env("DB_PORT", "5433")
+        "PORT": env("DB_PORT", "5432")
     }
 }
 
@@ -106,8 +106,8 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ("apps.accounts.auth.CookieJWTAuthentication",),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticatedOrReadOnly",),
     "DEFAULT_THROTTLE_RATES": {
-        "sms_ip": env("SMS_THROTTLE_IP", "10/min"),
-        "sms_phone": env("SMS_THROTTLE_PHONE", "3/min"),
+        "code_ip": env("CODE_THROTTLE_IP", env("SMS_THROTTLE_IP", "10/min")),
+        "code_email": env("CODE_THROTTLE_EMAIL", env("SMS_THROTTLE_PHONE", "3/min")),
     },
 }
 
@@ -133,5 +133,4 @@ EMAIL_BACKEND = env("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBac
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "no-reply@example.com")
 ADMIN_NOTIFICATION_EMAILS = [e.strip() for e in env("ADMIN_NOTIFICATION_EMAILS", "").split(",") if e.strip()]
 
-SMS_BACKEND = env("SMS_BACKEND", "console")
-SMS_MIN_INTERVAL_SECONDS = int(env("SMS_MIN_INTERVAL_SECONDS", "60"))
+EMAIL_CODE_MIN_INTERVAL_SECONDS = int(env("EMAIL_CODE_MIN_INTERVAL_SECONDS", env("SMS_MIN_INTERVAL_SECONDS", "60")))

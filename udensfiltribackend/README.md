@@ -1,18 +1,36 @@
 # Plumbing Backend (Django + DRF + Postgres)
 
-Includes: phone-first auth with SMS verification, JWT cookies, Stripe + webhook, optional email receipts,
+Includes: auth with email verification codes, JWT cookies, Stripe + webhook, optional email receipts,
 catalog, cases (equipment + chat), blog, admin panel, and unit tests.
 
-## Setup
-1) `cp .env.example .env` and edit values
+## Local setup (without Docker)
+Run these commands from `udensfiltribackend/`:
+
+1) `cp ../.env.example ../.env` and edit values
 2) `pip install -r requirements.txt`
 3) `python manage.py migrate`
 4) `python manage.py createsuperuser`
 5) `python manage.py runserver`
 
+## Docker setup (production-ready baseline)
+Run these commands from the repository root:
+
+1) `cp .env.example .env`
+2) Edit `.env` for production (especially `DJANGO_SECRET_KEY`, `DJANGO_ALLOWED_HOSTS`, TLS/cookie settings)
+3) `docker compose up --build -d`
+
+Services included:
+- `web`: Django app served via Gunicorn (`0.0.0.0:8000`)
+- `db`: PostgreSQL 16 with persistent volume `postgres_data`
+
+The `web` container waits for PostgreSQL, then runs:
+- `python manage.py migrate --noinput`
+- `python manage.py collectstatic --noinput`
+
+before starting Gunicorn.
+
 ## Tests
 `python manage.py test`
-
 
 ## Deployment notes (Latvia / areait.lv)
 
@@ -43,4 +61,3 @@ gunicorn config.wsgi:application --bind 0.0.0.0:8000 --workers 3
 Ensure your Nginx config sets:
 - `proxy_set_header X-Forwarded-Proto $scheme;`
 - `proxy_set_header Host $host;`
-

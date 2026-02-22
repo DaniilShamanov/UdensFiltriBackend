@@ -1,48 +1,73 @@
+from django.core import mail
 from django.test import TestCase
 from rest_framework.test import APIClient
-from .models import User, SMSCode
+
+from .models import EmailCode, User
+
 
 class AuthFlowTests(TestCase):
     def setUp(self):
         self.client = APIClient()
 
-    def test_register_with_sms_code_phone_first(self):
-        r = self.client.post("/api/auth/request-sms-code/", {"purpose":"register","phone":"+37120000000"}, format="json")
+    def test_register_with_email_code_and_optional_phone(self):
+        email = "user@example.com"
+        r = self.client.post("/api/auth/request-email-code/", {"purpose": "register", "email": email}, format="json")
         self.assertEqual(r.status_code, 200)
-        code = SMSCode.objects.filter(phone="+37120000000", purpose="register").latest("created_at").code
-        r2 = self.client.post("/api/auth/register/", {"phone":"+37120000000","password":"StrongPass123","code":code}, format="json")
+
+        code = EmailCode.objects.filter(email=email, purpose="register").latest("created_at").code
+        r2 = self.client.post(
+            "/api/auth/register/",
+            {"email": email, "password": "StrongPass123", "code": code},
+            format="json",
+        )
         self.assertEqual(r2.status_code, 201)
         self.assertIn("access", r2.cookies)
         self.assertIn("refresh", r2.cookies)
-        self.assertTrue(User.objects.filter(phone="+37120000000").exists())
 
-    def test_login_sets_cookies(self):
-        User.objects.create_user(phone="+37120000001", password="StrongPass123")
-        r = self.client.post("/api/auth/login/", {"phone":"+37120000001","password":"StrongPass123"}, format="json")
+        user = User.objects.get(email=email)
+        self.assertIsNone(user.phone)
+
+    def test_login_with_email_sets_cookies(self):
+        user = User.objects.create_user(phone=None, email="u@example.com", password="StrongPass123")
+        self.assertIsNotNone(user.pk)
+
+        r = self.client.post("/api/auth/login/", {"email": "u@example.com", "password": "StrongPass123"}, format="json")
         self.assertEqual(r.status_code, 200)
         self.assertIn("access", r.cookies)
 
+    def test_email_code_lockout_after_failed_attempts(self):
+        email = "lock@example.com"
+        self.client.post("/api/auth/request-email-code/", {"purpose": "register", "email": email}, format="json")
+        latest = EmailCode.objects.filter(email=email, purpose="register").latest("created_at")
 
-    def test_sms_code_lockout_after_failed_attempts(self):
-        # Request a code
-        self.client.post("/api/auth/request-sms-code/", {"purpose":"register","phone":"+37120000009"}, format="json")
-        latest = SMSCode.objects.filter(phone="+37120000009", purpose="register").latest("created_at")
-
-        # Try wrong code 5 times -> lock
         for _ in range(5):
-            r = self.client.post("/api/auth/register/", {"phone":"+37120000009","password":"StrongPass123","code":"000000"}, format="json")
+            r = self.client.post(
+                "/api/auth/register/",
+                {"email": email, "password": "StrongPass123", "code": "000000"},
+                format="json",
+            )
         self.assertIn(r.status_code, (400, 429))
 
         latest.refresh_from_db()
         self.assertIsNotNone(latest.locked_until)
 
-        # Even with correct code now -> locked
-        r2 = self.client.post("/api/auth/register/", {"phone":"+37120000009","password":"StrongPass123","code":latest.code}, format="json")
+        r2 = self.client.post(
+            "/api/auth/register/",
+            {"email": email, "password": "StrongPass123", "code": latest.code},
+            format="json",
+        )
         self.assertEqual(r2.status_code, 429)
 
-
-    def test_sms_min_interval(self):
-        r1 = self.client.post("/api/auth/request-sms-code/", {"purpose":"register","phone":"+37120000011"}, format="json")
+    def test_email_code_min_interval(self):
+        email = "rate@example.com"
+        r1 = self.client.post("/api/auth/request-email-code/", {"purpose": "register", "email": email}, format="json")
         self.assertEqual(r1.status_code, 200)
-        r2 = self.client.post("/api/auth/request-sms-code/", {"purpose":"register","phone":"+37120000011"}, format="json")
+        r2 = self.client.post("/api/auth/request-email-code/", {"purpose": "register", "email": email}, format="json")
         self.assertEqual(r2.status_code, 429)
+
+    def test_request_email_code_sends_email(self):
+        email = "mailbox@example.com"
+        r = self.client.post("/api/auth/request-email-code/", {"purpose": "register", "email": email}, format="json")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(mail.outbox), 1)
+        self.assertEqual(mail.outbox[0].to, [email])
