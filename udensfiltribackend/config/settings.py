@@ -7,16 +7,22 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 def env(name, default=None):
     return os.environ.get(name, default)
 
-SECRET_KEY = env("DJANGO_SECRET_KEY", "dev-secret-key")
-DEBUG = env("DJANGO_DEBUG", "1") == "1"
+SECRET_KEY = env("DJANGO_SECRET_KEY", "")
+DEBUG = env("DJANGO_DEBUG", "0") == "1"
+
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = "dev-secret-key"
+    else:
+        raise RuntimeError("DJANGO_SECRET_KEY must be set when DJANGO_DEBUG=0")
 
 # Latvia / production hosting notes:
 # - areait.lv typically runs behind Nginx; enable proxy SSL header
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = env("DJANGO_SECURE_SSL_REDIRECT", "0") == "1"
-SESSION_COOKIE_SECURE = env("DJANGO_SESSION_COOKIE_SECURE", "0") == "1"
-CSRF_COOKIE_SECURE = env("DJANGO_CSRF_COOKIE_SECURE", "0") == "1"
-SECURE_HSTS_SECONDS = int(env("DJANGO_SECURE_HSTS_SECONDS", "0"))
+SESSION_COOKIE_SECURE = env("DJANGO_SESSION_COOKIE_SECURE", "1") == "1"
+CSRF_COOKIE_SECURE = env("DJANGO_CSRF_COOKIE_SECURE", "1") == "1"
+SECURE_HSTS_SECONDS = int(env("DJANGO_SECURE_HSTS_SECONDS", "31536000"))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = env("DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS", "0") == "1"
 SECURE_HSTS_PRELOAD = env("DJANGO_SECURE_HSTS_PRELOAD", "0") == "1"
 SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
@@ -34,6 +40,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "corsheaders",
     "rest_framework",
+    "rest_framework_simplejwt.token_blacklist",
     "apps.accounts",
     "apps.catalog",
     "apps.cases",
@@ -115,12 +122,12 @@ SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=1),
     "REFRESH_TOKEN_LIFETIME": timedelta(minutes=3),
     "ROTATE_REFRESH_TOKENS": True,
-    "BLACKLIST_AFTER_ROTATION": False,
+    "BLACKLIST_AFTER_ROTATION": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
 AUTH_COOKIE_DOMAIN = env("AUTH_COOKIE_DOMAIN", "") or None
-AUTH_COOKIE_SECURE = env("AUTH_COOKIE_SECURE", "0") == "1"
+AUTH_COOKIE_SECURE = env("AUTH_COOKIE_SECURE", "1") == "1"
 AUTH_COOKIE_SAMESITE = env("AUTH_COOKIE_SAMESITE", "Lax")
 AUTH_COOKIE_ACCESS_NAME = "access"
 AUTH_COOKIE_REFRESH_NAME = "refresh"

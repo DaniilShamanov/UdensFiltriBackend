@@ -1,9 +1,13 @@
+import logging
+
 import stripe
 from django.conf import settings
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view, permission_classes
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+
+logger = logging.getLogger(__name__)
 
 from .models import Order
 from .serializers import CreateCheckoutSerializer, OrderSerializer
@@ -63,13 +67,18 @@ def create_checkout_session(request):
 
 @csrf_exempt
 @api_view(["POST"])
+@permission_classes([AllowAny])
 def webhook(request):
     payload = request.body
     sig = request.META.get("HTTP_STRIPE_SIGNATURE","")
     try:
         event = stripe.Webhook.construct_event(payload, sig, settings.STRIPE_WEBHOOK_SECRET)
-    except Exception:
-        return Response({"detail":"invalid"}, status=400)
+    except ValueError:
+        logger.warning("Stripe webhook payload parse failure")
+        return Response({"detail":"invalid payload"}, status=400)
+    except stripe.error.SignatureVerificationError:
+        logger.warning("Stripe webhook signature verification failed")
+        return Response({"detail":"invalid signature"}, status=400)
 
     if event["type"] == "checkout.session.completed":
         data = event["data"]["object"]

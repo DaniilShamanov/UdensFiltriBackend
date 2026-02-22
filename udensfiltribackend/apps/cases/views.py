@@ -1,3 +1,4 @@
+from django.db.models import Prefetch
 from rest_framework import viewsets, permissions
 from .models import Equipment, PlumbingCase, CaseMessage
 from .serializers import EquipmentSerializer, PlumbingCaseSerializer, PlumbingCaseDetailSerializer, CaseMessageSerializer
@@ -14,7 +15,10 @@ class EquipmentViewSet(viewsets.ModelViewSet):
 class PlumbingCaseViewSet(viewsets.ModelViewSet):
     permission_classes=[permissions.IsAuthenticated, IsOwnerOrSuperuser]
     def get_queryset(self):
-        return PlumbingCase.objects.all().order_by("-created_at") if self.request.user.is_superuser else PlumbingCase.objects.filter(user=self.request.user).order_by("-created_at")
+        base = PlumbingCase.objects.select_related("equipment", "user").prefetch_related(
+            Prefetch("messages", queryset=CaseMessage.objects.select_related("sender").order_by("created_at"))
+        )
+        return base.order_by("-created_at") if self.request.user.is_superuser else base.filter(user=self.request.user).order_by("-created_at")
     def get_serializer_class(self):
         return PlumbingCaseDetailSerializer if self.action=="retrieve" else PlumbingCaseSerializer
     def perform_create(self, serializer):

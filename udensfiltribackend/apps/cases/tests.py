@@ -19,6 +19,18 @@ class CasesPermissionTests(TestCase):
         r3 = c2.get(f"/api/cases/cases/{case_id}/")
         self.assertEqual(r3.status_code, 404)
 
+
+    def test_user_cannot_post_message_to_other_user_case(self):
+        r = self.client.post("/api/cases/cases/", {"title":"Leak","description":"desc"}, format="json")
+        own_case_id = r.data["id"]
+
+        c2 = APIClient()
+        r2 = c2.post("/api/auth/login/", {"phone":self.u2.phone,"password":"StrongPass123"}, format="json")
+        c2.cookies = r2.cookies
+
+        r3 = c2.post("/api/cases/messages/", {"case": own_case_id, "message": "hijack"}, format="json")
+        self.assertEqual(r3.status_code, 400)
+
     def test_internal_message_rejected_for_regular_user(self):
         r = self.client.post("/api/cases/cases/", {"title":"Leak","description":"desc"}, format="json")
         case_id = r.data["id"]
