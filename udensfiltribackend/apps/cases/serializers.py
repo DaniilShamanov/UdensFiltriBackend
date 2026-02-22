@@ -16,6 +16,12 @@ class CaseMessageSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("Only superuser can create internal notes")
         return value
 
+    def validate_case(self, value):
+        req = self.context.get("request")
+        if req and req.user.is_authenticated and (not req.user.is_superuser) and value.user_id != req.user.id:
+            raise serializers.ValidationError("You cannot post messages to this case")
+        return value
+
 class PlumbingCaseSerializer(serializers.ModelSerializer):
     class Meta:
         model=PlumbingCase

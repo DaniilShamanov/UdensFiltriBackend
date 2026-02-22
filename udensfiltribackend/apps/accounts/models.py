@@ -1,7 +1,14 @@
 from django.db import models
-from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseUserManager
+from django.db.models import Q
+from django.db.models.functions import Lower
+from django.contrib.auth.models import AbstractBaseUser, PermissionsMixin, BaseUserManager, Group
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.utils import timezone
 from datetime import timedelta
+
+
+REGULAR_USERS_GROUP = "regular_users"
+BUSINESS_USERS_GROUP = "business_users"
 
 
 class UserManager(BaseUserManager):
@@ -19,6 +26,15 @@ class UserManager(BaseUserManager):
 
 
 class User(AbstractBaseUser, PermissionsMixin):
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                Lower("email"),
+                condition=Q(email__isnull=False),
+                name="accounts_user_email_ci_unique",
+            )
+        ]
+
     phone = models.CharField(max_length=32, unique=True, blank=True, null=True)
     email = models.EmailField(blank=True, null=True)
     first_name = models.CharField(max_length=150, blank=True, default="")
@@ -34,6 +50,23 @@ class User(AbstractBaseUser, PermissionsMixin):
 
     def __str__(self):
         return self.phone or self.email or f"User #{self.pk}"
+
+
+class GroupDiscount(models.Model):
+    group = models.OneToOneField(Group, on_delete=models.CASCADE, related_name="discount")
+    percentage = models.PositiveSmallIntegerField(
+        default=0,
+        validators=[MinValueValidator(0), MaxValueValidator(90)],
+        help_text="Discount percent to apply for users in this group",
+    )
+    is_active = models.BooleanField(default=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ("group__name",)
+
+    def __str__(self):
+        return f"{self.group.name}: {self.percentage}%"
 
 
 class EmailCode(models.Model):
