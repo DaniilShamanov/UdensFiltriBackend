@@ -122,8 +122,8 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ("apps.accounts.auth.CookieJWTAuthentication",),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticatedOrReadOnly",),
     "DEFAULT_THROTTLE_RATES": {
-        "code_ip": env("CODE_THROTTLE_IP", env("SMS_THROTTLE_IP", "10/min")),
-        "code_email": env("CODE_THROTTLE_EMAIL", env("SMS_THROTTLE_PHONE", "3/min")),
+        "code_ip": env("CODE_THROTTLE_IP", "10/min"),
+        "code_email": env("CODE_THROTTLE_EMAIL", "3/min"),
     },
 }
 
@@ -154,4 +154,4 @@ else:
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "no-reply@example.com")
 ADMIN_NOTIFICATION_EMAILS = [e.strip() for e in env("ADMIN_NOTIFICATION_EMAILS", "").split(",") if e.strip()]
 
-EMAIL_CODE_MIN_INTERVAL_SECONDS = int(env("EMAIL_CODE_MIN_INTERVAL_SECONDS", env("SMS_MIN_INTERVAL_SECONDS", "60")))
+EMAIL_CODE_MIN_INTERVAL_SECONDS = int(env("EMAIL_CODE_MIN_INTERVAL_SECONDS", "60"))
