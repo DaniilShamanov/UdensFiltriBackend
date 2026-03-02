@@ -1,12 +1,20 @@
 import random
 from datetime import timedelta
 
+import phonenumbers
 from django.conf import settings
 from django.core.mail import send_mail
 from django.utils import timezone
-import phonenumbers
 
 from .models import EmailCode
+
+
+VERIFICATION_SUBJECTS = {
+    "register": "Registration confirmation code",
+    "change_email": "Email change confirmation code",
+    "change_password": "Password change confirmation code",
+    "change_phone": "Profile update confirmation code",
+}
 
 
 def normalize_phone(phone: str) -> str:
@@ -26,11 +34,7 @@ def normalize_phone(phone: str) -> str:
 
 def create_email_code(email: str, purpose: str, ttl_minutes: int = 10) -> EmailCode:
     min_interval = int(getattr(settings, "EMAIL_CODE_MIN_INTERVAL_SECONDS", 60))
-    last = (
-        EmailCode.objects.filter(email=email, purpose=purpose)
-        .order_by("-created_at")
-        .first()
-    )
+    last = EmailCode.objects.filter(email=email, purpose=purpose).order_by("-created_at").first()
     if last and (timezone.now() - last.created_at).total_seconds() < min_interval:
         raise ValueError("Please wait before requesting a new code")
 
@@ -45,10 +49,11 @@ def create_email_code(email: str, purpose: str, ttl_minutes: int = 10) -> EmailC
     )
 
 
-def send_verification_email(email: str, code: str) -> None:
+def send_verification_email(email: str, code: str, purpose: str) -> None:
+    subject = VERIFICATION_SUBJECTS.get(purpose, "Confirmation code")
     send_mail(
-        subject="Your verification code",
-        message=f"Your verification code is: {code}",
+        subject=subject,
+        message=f"Your confirmation code is: {code}",
         from_email=settings.DEFAULT_FROM_EMAIL,
         recipient_list=[email],
         fail_silently=False,

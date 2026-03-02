@@ -24,19 +24,15 @@ class RequestEmailCodeSerializer(serializers.Serializer):
             if not email:
                 raise serializers.ValidationError({"email": "Email is required"})
             attrs["email"] = email
-        elif purpose == "change_email":
-            if not req.user.is_authenticated:
-                raise serializers.ValidationError("Authentication required")
-            if not email:
-                raise serializers.ValidationError({"email": "New email is required"})
-            attrs["email"] = email
-        else:
-            if not req.user.is_authenticated:
-                raise serializers.ValidationError("Authentication required")
-            if not req.user.email:
-                raise serializers.ValidationError({"email": "Current user email is not set"})
-            attrs["email"] = req.user.email.lower()
+            return attrs
 
+        if not req.user.is_authenticated:
+            raise serializers.ValidationError("Authentication required")
+        if not req.user.email:
+            raise serializers.ValidationError({"email": "Current user email is not set"})
+
+        # Security: account update confirmations must go to currently verified address.
+        attrs["email"] = req.user.email.lower()
         return attrs
 
 
@@ -86,7 +82,7 @@ class ProfileUpdateSerializer(serializers.Serializer):
 
 
 class ChangeEmailSerializer(serializers.Serializer):
-    email = serializers.EmailField(required=False, allow_null=True, allow_blank=True)
+    new_email = serializers.EmailField()
     code = serializers.CharField(min_length=6, max_length=6)
 
 
