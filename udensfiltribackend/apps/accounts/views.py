@@ -77,7 +77,7 @@ def request_email_code(request):
         code_obj = create_email_code(email, purpose)
     except ValueError as exc:
         return Response({"detail": str(exc)}, status=429)
-    send_verification_email(email, code_obj.code)
+    send_verification_email(email, code_obj.code, purpose)
     return Response({"ok": True})
 
 
@@ -156,10 +156,13 @@ def me(request):
 def profile(request):
     ser = ProfileUpdateSerializer(data=request.data)
     ser.is_valid(raise_exception=True)
-    for f in ["first_name", "last_name"]:
-        if f in ser.validated_data:
-            setattr(request.user, f, ser.validated_data[f])
-    request.user.save(update_fields=["first_name", "last_name"])
+    update_fields = []
+    for field in ["first_name", "last_name"]:
+        if field in ser.validated_data:
+            setattr(request.user, field, ser.validated_data[field])
+            update_fields.append(field)
+    if update_fields:
+        request.user.save(update_fields=update_fields)
     return Response({"user": UserSerializer(request.user).data})
 
 
@@ -176,7 +179,11 @@ def change_email(request):
         status_code = 429 if reason == "locked" else 400
         return Response({"detail": "Invalid or expired code"}, status=status_code)
 
-    request.user.email = (ser.validated_data.get("email") or "").strip() or None
+    new_email = ser.validated_data["new_email"].strip().lower()
+    if User.objects.filter(email__iexact=new_email).exclude(pk=request.user.pk).exists():
+        return Response({"detail": "User with this email already exists"}, status=400)
+
+    request.user.email = new_email
     request.user.save(update_fields=["email"])
     return Response({"user": UserSerializer(request.user).data})
 

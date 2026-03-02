@@ -29,6 +29,10 @@ The `web` container waits for PostgreSQL, then runs:
 
 before starting Gunicorn.
 
+## Email provider (SendGrid)
+Set `SENDGRID_API_KEY` to enable SendGrid delivery through built-in backend `config.email_backends.SendGridEmailBackend`.
+If no API key is set, the project keeps using the configured `EMAIL_BACKEND` (console by default for local development).
+
 ## Tests
 `python manage.py test`
 
