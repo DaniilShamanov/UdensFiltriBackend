@@ -5,8 +5,11 @@ class CookieJWTAuthentication(JWTAuthentication):
     def authenticate(self, request):
         raw = request.COOKIES.get(settings.AUTH_COOKIE_ACCESS_NAME)
         if raw:
-            validated = self.get_validated_token(raw)
-            return self.get_user(validated), validated
+            try:
+                validated = self.get_validated_token(raw)
+                return self.get_user(validated), validated
+            except Exception:
+                return None
         return super().authenticate(request)
 
 def set_auth_cookies(response, access: str, refresh: str):

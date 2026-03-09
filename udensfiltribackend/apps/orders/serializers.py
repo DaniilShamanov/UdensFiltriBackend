@@ -2,19 +2,42 @@ from rest_framework import serializers
 
 from apps.accounts.models import GroupDiscount
 from apps.catalog.models import Product, Service
-from .models import Order
+from .models import DeliveryOption, Order
+
+
+class DeliveryOptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DeliveryOption
+        fields = ("id", "name", "description", "price_cents", "currency")
 
 
 class OrderSerializer(serializers.ModelSerializer):
+    delivery_option = DeliveryOptionSerializer(read_only=True)
+
     class Meta:
         model = Order
-        fields = ("id", "status", "currency", "total_cents", "items", "created_at", "updated_at")
+        fields = (
+            "id",
+            "status",
+            "currency",
+            "total_cents",
+            "items",
+            "email",
+            "customer_name",
+            "customer_address",
+            "delivery_option",
+            "created_at",
+            "updated_at",
+        )
 
 
 class CreateCheckoutSerializer(serializers.Serializer):
     items = serializers.ListField(child=serializers.DictField(), allow_empty=False)
     currency = serializers.CharField(required=False)
-    email = serializers.EmailField(required=False, allow_blank=True, allow_null=True)
+    email = serializers.EmailField(required=True)
+    customer_name = serializers.CharField(required=True, max_length=200)
+    customer_address = serializers.CharField(required=True, max_length=500)
+    delivery_option_id = serializers.IntegerField(required=True)
 
     def _resolve_discount(self):
         req = self.context.get("request")
@@ -28,6 +51,12 @@ class CreateCheckoutSerializer(serializers.Serializer):
             .first()
         )
         return int(result or 0)
+
+    def validate_delivery_option_id(self, value):
+        try:
+            return DeliveryOption.objects.get(id=value, is_active=True)
+        except DeliveryOption.DoesNotExist as exc:
+            raise serializers.ValidationError("Invalid delivery option") from exc
 
     def validate_items(self, items):
         normalized_items = []
@@ -95,7 +124,7 @@ class CreateCheckoutSerializer(serializers.Serializer):
 
             total += qty * discounted_unit_price_cents
 
-        self.context["total_cents"] = total
+        self.context["items_total_cents"] = total
         self.context["currency"] = currency or "EUR"
         return normalized_items
 
@@ -104,5 +133,12 @@ class CreateCheckoutSerializer(serializers.Serializer):
         resolved_currency = self.context.get("currency", "EUR")
         if requested_currency and requested_currency.upper() != resolved_currency.upper():
             raise serializers.ValidationError({"currency": "Currency mismatch with selected catalog items"})
+
+        delivery_option = attrs["delivery_option_id"]
+        if delivery_option.currency.upper() != resolved_currency.upper():
+            raise serializers.ValidationError({"delivery_option_id": "Delivery currency does not match cart currency"})
+
         attrs["currency"] = resolved_currency
+        attrs["delivery_option"] = delivery_option
+        attrs["total_cents"] = self.context.get("items_total_cents", 0) + delivery_option.price_cents
         return attrs
