@@ -40,6 +40,13 @@ class AuthFlowTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertIn("access", r.cookies)
 
+
+    def test_login_works_with_stale_access_cookie(self):
+        User.objects.create_user(phone=None, email="stale@example.com", password="StrongPass123")
+        self.client.cookies["access"] = "stale.invalid.token"
+        r = self.client.post("/api/auth/login/", {"email": "stale@example.com", "password": "StrongPass123"}, format="json")
+        self.assertEqual(r.status_code, 200)
+
     def test_email_code_lockout_after_failed_attempts(self):
         email = "lock@example.com"
         self.client.post("/api/auth/request-email-code/", {"purpose": "register", "email": email}, format="json")
