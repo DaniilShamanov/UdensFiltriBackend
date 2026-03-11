@@ -38,7 +38,11 @@ class RequestEmailCodeSerializer(serializers.Serializer):
 
 class RegisterSerializer(serializers.Serializer):
     email = serializers.EmailField()
-    password = serializers.CharField(write_only=True, min_length=8)
+    password = serializers.CharField(
+        write_only=True,
+        min_length=6,
+        error_messages={"min_length": "Password must be at least 6 characters long."},
+    )
     code = serializers.CharField(min_length=6, max_length=6)
     phone = serializers.CharField(required=False, allow_blank=True)
     first_name = serializers.CharField(required=False, allow_blank=True)
@@ -97,5 +101,9 @@ class ChangePhoneSerializer(serializers.Serializer):
 
 
 class ChangePasswordSerializer(serializers.Serializer):
-    new_password = serializers.CharField(write_only=True, min_length=8)
+    new_password = serializers.CharField(
+        write_only=True,
+        min_length=6,
+        error_messages={"min_length": "Password must be at least 6 characters long."},
+    )
     code = serializers.CharField(min_length=6, max_length=6)
