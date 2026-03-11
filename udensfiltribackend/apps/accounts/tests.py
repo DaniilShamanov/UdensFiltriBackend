@@ -40,7 +40,6 @@ class AuthFlowTests(TestCase):
         self.assertEqual(r.status_code, 200)
         self.assertIn("access", r.cookies)
 
-
     def test_login_works_with_stale_access_cookie(self):
         User.objects.create_user(phone=None, email="stale@example.com", password="StrongPass123")
         self.client.cookies["access"] = "stale.invalid.token"
@@ -85,6 +84,20 @@ class AuthFlowTests(TestCase):
         self.assertEqual(mail.outbox[0].to, [email])
         self.assertIn("Registration confirmation code", mail.outbox[0].subject)
 
+    def test_register_password_min_length_validation_message(self):
+        email = "shortpass@example.com"
+        self.client.post("/api/auth/request-email-code/", {"purpose": "register", "email": email}, format="json")
+        code = EmailCode.objects.filter(email=email, purpose="register").latest("created_at").code
+
+        response = self.client.post(
+            "/api/auth/register/",
+            {"email": email, "password": "1234", "code": code},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("Password must be at least 6 characters long.", response.data["password"][0])
+
     @override_settings(EMAIL_CODE_MIN_INTERVAL_SECONDS=0)
     def test_change_email_and_password_use_current_email_verification(self):
         user = User.objects.create_user(phone=None, email="owner@example.com", password="StrongPass123")
@@ -128,6 +141,27 @@ class AuthFlowTests(TestCase):
             format="json",
         )
         self.assertEqual(relogin.status_code, 200)
+
+    @override_settings(EMAIL_CODE_MIN_INTERVAL_SECONDS=0)
+    def test_change_password_min_length_validation_message(self):
+        User.objects.create_user(phone=None, email="owner2@example.com", password="StrongPass123")
+        self._login("owner2@example.com", "StrongPass123")
+
+        password_code_request = self.client.post(
+            "/api/auth/request-email-code/",
+            {"purpose": "change_password"},
+            format="json",
+        )
+        self.assertEqual(password_code_request.status_code, 200)
+
+        password_code = EmailCode.objects.filter(email="owner2@example.com", purpose="change_password").latest("created_at").code
+        change_password_response = self.client.post(
+            "/api/auth/change-password/",
+            {"new_password": "1234", "code": password_code},
+            format="json",
+        )
+        self.assertEqual(change_password_response.status_code, 400)
+        self.assertIn("Password must be at least 6 characters long.", change_password_response.data["new_password"][0])
 
 
 class SendGridSettingsTests(TestCase):
