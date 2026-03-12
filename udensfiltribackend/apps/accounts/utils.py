@@ -5,6 +5,7 @@ import phonenumbers
 from django.conf import settings
 from django.core.mail import send_mail
 from django.utils import timezone
+from django.utils.translation import gettext_lazy as _
 
 from .models import EmailCode
 
@@ -20,23 +21,23 @@ VERIFICATION_SUBJECTS = {
 def normalize_phone(phone: str) -> str:
     phone = (phone or "").strip()
     if not phone:
-        raise ValueError("Phone is required")
+        raise ValueError(_("Phone is required."))
 
     try:
         region = None if phone.startswith("+") else "LV"
         parsed = phonenumbers.parse(phone, region)
         if not phonenumbers.is_valid_number(parsed):
-            raise ValueError("Invalid phone number")
+            raise ValueError(_("Invalid phone number."))
         return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
     except Exception as exc:
-        raise ValueError("Invalid phone number") from exc
+        raise ValueError(_("Invalid phone number.")) from exc
 
 
 def create_email_code(email: str, purpose: str, ttl_minutes: int = 10) -> EmailCode:
     min_interval = int(getattr(settings, "EMAIL_CODE_MIN_INTERVAL_SECONDS", 60))
     last = EmailCode.objects.filter(email=email, purpose=purpose).order_by("-created_at").first()
     if last and (timezone.now() - last.created_at).total_seconds() < min_interval:
-        raise ValueError("Please wait before requesting a new code")
+        raise ValueError(_("Please wait before requesting a new code."))
 
     code = f"{random.randint(0, 999999):06d}"
     return EmailCode.objects.create(

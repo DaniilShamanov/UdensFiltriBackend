@@ -96,7 +96,25 @@ class AuthFlowTests(TestCase):
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertIn("Password must be at least 6 characters long.", response.data["password"][0])
+        self.assertEqual(response.data["error"]["code"], "validation_error")
+        self.assertEqual(response.data["error"]["fields"]["password"][0]["code"], "min_length")
+        self.assertIn("Password must be at least 6 characters long.", response.data["error"]["fields"]["password"][0]["message"])
+
+
+    def test_register_invalid_phone_returns_structured_error(self):
+        email = "invalid-phone@example.com"
+        self.client.post("/api/auth/request-email-code/", {"purpose": "register", "email": email}, format="json")
+        code = EmailCode.objects.filter(email=email, purpose="register").latest("created_at").code
+
+        response = self.client.post(
+            "/api/auth/register/",
+            {"email": email, "password": "StrongPass123", "code": code, "phone": "abc"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["error"]["code"], "validation_error")
+        self.assertEqual(response.data["error"]["fields"]["phone"][0]["code"], "invalid_phone")
 
     @override_settings(EMAIL_CODE_MIN_INTERVAL_SECONDS=0)
     def test_change_email_and_password_use_current_email_verification(self):
@@ -161,7 +179,9 @@ class AuthFlowTests(TestCase):
             format="json",
         )
         self.assertEqual(change_password_response.status_code, 400)
-        self.assertIn("Password must be at least 6 characters long.", change_password_response.data["new_password"][0])
+        self.assertEqual(change_password_response.data["error"]["code"], "validation_error")
+        self.assertEqual(change_password_response.data["error"]["fields"]["new_password"][0]["code"], "min_length")
+        self.assertIn("Password must be at least 6 characters long.", change_password_response.data["error"]["fields"]["new_password"][0]["message"])
 
 
 class SendGridSettingsTests(TestCase):

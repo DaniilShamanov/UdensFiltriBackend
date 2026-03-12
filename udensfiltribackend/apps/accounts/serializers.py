@@ -1,4 +1,5 @@
 from django.contrib.auth import authenticate
+from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
 from .models import User
@@ -22,14 +23,14 @@ class RequestEmailCodeSerializer(serializers.Serializer):
 
         if purpose == "register":
             if not email:
-                raise serializers.ValidationError({"email": "Email is required"})
+                raise serializers.ValidationError({"email": serializers.ErrorDetail(_("Email is required."), code="required")})
             attrs["email"] = email
             return attrs
 
         if not req.user.is_authenticated:
-            raise serializers.ValidationError("Authentication required")
+            raise serializers.ValidationError(serializers.ErrorDetail(_("Authentication required."), code="authentication_required"))
         if not req.user.email:
-            raise serializers.ValidationError({"email": "Current user email is not set"})
+            raise serializers.ValidationError({"email": serializers.ErrorDetail(_("Current user email is not set."), code="missing_email")})
 
         # Security: account update confirmations must go to currently verified address.
         attrs["email"] = req.user.email.lower()
@@ -41,7 +42,7 @@ class RegisterSerializer(serializers.Serializer):
     password = serializers.CharField(
         write_only=True,
         min_length=6,
-        error_messages={"min_length": "Password must be at least 6 characters long."},
+        error_messages={"min_length": _("Password must be at least 6 characters long.")},
     )
     code = serializers.CharField(min_length=6, max_length=6)
     phone = serializers.CharField(required=False, allow_blank=True)
@@ -51,7 +52,10 @@ class RegisterSerializer(serializers.Serializer):
     def validate_phone(self, value):
         if not value:
             return None
-        return normalize_phone(value)
+        try:
+            return normalize_phone(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(serializers.ErrorDetail(str(exc), code="invalid_phone")) from exc
 
 
 class LoginSerializer(serializers.Serializer):
@@ -64,17 +68,20 @@ class LoginSerializer(serializers.Serializer):
         email = (attrs.get("email") or "").strip().lower()
 
         if phone:
-            phone = normalize_phone(phone)
+            try:
+                phone = normalize_phone(phone)
+            except ValueError as exc:
+                raise serializers.ValidationError({"phone": serializers.ErrorDetail(str(exc), code="invalid_phone")}) from exc
             user = authenticate(phone=phone, password=attrs["password"])
         elif email:
             user = User.objects.filter(email__iexact=email).first()
             if not user or not user.check_password(attrs["password"]):
                 user = None
         else:
-            raise serializers.ValidationError("Either phone or email must be provided")
+            raise serializers.ValidationError(serializers.ErrorDetail(_("Either phone or email must be provided."), code="missing_credentials"))
 
         if not user:
-            raise serializers.ValidationError("Invalid credentials")
+            raise serializers.ValidationError(serializers.ErrorDetail(_("Invalid credentials."), code="invalid_credentials"))
 
         attrs["user"] = user
         return attrs
@@ -97,13 +104,16 @@ class ChangePhoneSerializer(serializers.Serializer):
     def validate_new_phone(self, value):
         if not value:
             return None
-        return normalize_phone(value)
+        try:
+            return normalize_phone(value)
+        except ValueError as exc:
+            raise serializers.ValidationError(serializers.ErrorDetail(str(exc), code="invalid_phone")) from exc
 
 
 class ChangePasswordSerializer(serializers.Serializer):
     new_password = serializers.CharField(
         write_only=True,
         min_length=6,
-        error_messages={"min_length": "Password must be at least 6 characters long."},
+        error_messages={"min_length": _("Password must be at least 6 characters long.")},
     )
     code = serializers.CharField(min_length=6, max_length=6)
