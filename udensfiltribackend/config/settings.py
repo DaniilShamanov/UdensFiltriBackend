@@ -52,6 +52,7 @@ MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.locale.LocaleMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -105,6 +106,8 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 LANGUAGE_CODE = "lv"
+LANGUAGES = (("lv", "Latviešu"), ("en", "English"))
+LOCALE_PATHS = [BASE_DIR / "locale"]
 TIME_ZONE = "Europe/Riga"
 USE_I18N = True
 USE_TZ = True
@@ -121,6 +124,7 @@ CSRF_TRUSTED_ORIGINS = [o for o in FRONTEND_ORIGINS if o.startswith("https://") 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ("apps.accounts.auth.CookieJWTAuthentication",),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticatedOrReadOnly",),
+    "EXCEPTION_HANDLER": "config.api_errors.custom_exception_handler",
     "DEFAULT_THROTTLE_RATES": {
         "code_ip": env("CODE_THROTTLE_IP", "10/min"),
         "code_email": env("CODE_THROTTLE_EMAIL", "3/min"),
@@ -160,6 +164,25 @@ EMAIL_CODE_MIN_INTERVAL_SECONDS = int(env("EMAIL_CODE_MIN_INTERVAL_SECONDS", "60
 LOG_DIR = BASE_DIR / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
+LOGGING_HANDLER = {
+    "level": "INFO",
+    "class": "logging.handlers.TimedRotatingFileHandler",
+    "filename": str(LOG_DIR / "backend.log"),
+    "when": "midnight",
+    "backupCount": 30,
+    "formatter": "verbose",
+    "encoding": "utf-8",
+}
+
+if os.name == "nt":
+    LOGGING_HANDLER = {
+        "level": "INFO",
+        "class": "logging.FileHandler",
+        "filename": str(LOG_DIR / "backend.log"),
+        "formatter": "verbose",
+        "encoding": "utf-8",
+    }
+
 LOGGING = {
     "version": 1,
     "disable_existing_loggers": False,
@@ -168,17 +191,7 @@ LOGGING = {
             "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         }
     },
-    "handlers": {
-        "daily_file": {
-            "level": "INFO",
-            "class": "logging.handlers.TimedRotatingFileHandler",
-            "filename": str(LOG_DIR / "backend.log"),
-            "when": "midnight",
-            "backupCount": 30,
-            "formatter": "verbose",
-            "encoding": "utf-8",
-        },
-    },
+    "handlers": {"daily_file": LOGGING_HANDLER},
     "root": {
         "handlers": ["daily_file"],
         "level": "INFO",
