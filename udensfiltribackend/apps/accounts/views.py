@@ -25,7 +25,7 @@ from .serializers import (
     UserSerializer,
 )
 from .throttles import CodeEmailThrottle, CodeIPThrottle
-from .utils import create_email_code, send_verification_email
+from .utils import create_email_code
 
 
 def _error_response(code: str, message: str, status_code: int, fields=None):
@@ -85,7 +85,8 @@ def request_email_code(request):
         code_obj = create_email_code(email, purpose)
     except ValueError as exc:
         return _error_response("code_rate_limited", str(exc), 429)
-    send_verification_email(email, code_obj.code, purpose)
+    if getattr(settings, "EMAIL_CODE_MOCK_MODE", False):
+        return Response({"ok": True, "mock_code": code_obj.code})
     return Response({"ok": True})
 
 
@@ -104,7 +105,6 @@ def register(request):
         return _error_response("email_exists", _("User with this email already exists."), 400)
 
     user = User.objects.create_user(
-        phone=ser.validated_data.get("phone"),
         password=ser.validated_data["password"],
         email=email,
         first_name=ser.validated_data.get("first_name", ""),
@@ -201,15 +201,12 @@ def change_email(request):
 def change_phone(request):
     ser = ChangePhoneSerializer(data=request.data)
     ser.is_valid(raise_exception=True)
-    if not request.user.email:
-        return _error_response("missing_email", _("User email is not set."), 400)
 
-    ok, reason = _verify_and_consume_code(request.user.email.lower(), "change_phone", ser.validated_data["code"])
-    if not ok:
-        status_code = 429 if reason == "locked" else 400
-        return _error_response("invalid_code", _("Invalid or expired code."), status_code)
+    new_phone = ser.validated_data.get("new_phone")
+    if new_phone and User.objects.filter(phone=new_phone).exclude(pk=request.user.pk).exists():
+        return _error_response("phone_exists", _("User with this phone already exists."), 400)
 
-    request.user.phone = ser.validated_data.get("new_phone")
+    request.user.phone = new_phone
     request.user.save(update_fields=["phone"])
     return Response({"user": UserSerializer(request.user).data})
 

@@ -1,9 +1,16 @@
-from django.contrib.auth import authenticate
+import re
+
 from django.utils.translation import gettext_lazy as _
 from rest_framework import serializers
 
 from .models import User
-from .utils import normalize_phone
+
+
+SQLI_PATTERN = re.compile(r"(--|/\*|\*/|;|\b(select|union|insert|update|delete|drop|alter|truncate|exec|xp_)\b)", re.IGNORECASE)
+
+
+def _contains_sqli_payload(value: str) -> bool:
+    return bool(SQLI_PATTERN.search((value or "").strip()))
 
 
 class UserSerializer(serializers.ModelSerializer):
@@ -13,7 +20,7 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 class RequestEmailCodeSerializer(serializers.Serializer):
-    purpose = serializers.ChoiceField(choices=["register", "change_email", "change_phone", "change_password"])
+    purpose = serializers.ChoiceField(choices=["register", "change_email", "change_password"])
     email = serializers.EmailField(required=False, allow_blank=True)
 
     def validate(self, attrs):
@@ -32,7 +39,6 @@ class RequestEmailCodeSerializer(serializers.Serializer):
         if not req.user.email:
             raise serializers.ValidationError({"email": serializers.ErrorDetail(_("Current user email is not set."), code="missing_email")})
 
-        # Security: account update confirmations must go to currently verified address.
         attrs["email"] = req.user.email.lower()
         return attrs
 
@@ -45,42 +51,35 @@ class RegisterSerializer(serializers.Serializer):
         error_messages={"min_length": _("Password must be at least 6 characters long.")},
     )
     code = serializers.CharField(min_length=6, max_length=6)
-    phone = serializers.CharField(required=False, allow_blank=True)
     first_name = serializers.CharField(required=False, allow_blank=True)
     last_name = serializers.CharField(required=False, allow_blank=True)
 
-    def validate_phone(self, value):
-        if not value:
-            return None
-        try:
-            return normalize_phone(value)
-        except ValueError as exc:
-            raise serializers.ValidationError(serializers.ErrorDetail(str(exc), code="invalid_phone")) from exc
+    def validate_email(self, value):
+        email = (value or "").strip().lower()
+        if _contains_sqli_payload(email):
+            raise serializers.ValidationError(serializers.ErrorDetail(_("Invalid email."), code="invalid_email"))
+        return email
 
 
 class LoginSerializer(serializers.Serializer):
-    phone = serializers.CharField(required=False, allow_blank=True)
-    email = serializers.EmailField(required=False, allow_blank=True)
+    email = serializers.EmailField()
     password = serializers.CharField(write_only=True)
 
+    def validate_email(self, value):
+        email = (value or "").strip().lower()
+        if _contains_sqli_payload(email):
+            raise serializers.ValidationError(serializers.ErrorDetail(_("Invalid email."), code="invalid_email"))
+        return email
+
     def validate(self, attrs):
-        phone = (attrs.get("phone") or "").strip()
-        email = (attrs.get("email") or "").strip().lower()
+        email = attrs["email"]
+        password = attrs["password"]
 
-        if phone:
-            try:
-                phone = normalize_phone(phone)
-            except ValueError as exc:
-                raise serializers.ValidationError({"phone": serializers.ErrorDetail(str(exc), code="invalid_phone")}) from exc
-            user = authenticate(phone=phone, password=attrs["password"])
-        elif email:
-            user = User.objects.filter(email__iexact=email).first()
-            if not user or not user.check_password(attrs["password"]):
-                user = None
-        else:
-            raise serializers.ValidationError(serializers.ErrorDetail(_("Either phone or email must be provided."), code="missing_credentials"))
+        if _contains_sqli_payload(password):
+            raise serializers.ValidationError(serializers.ErrorDetail(_("Invalid credentials."), code="invalid_credentials"))
 
-        if not user:
+        user = User.objects.filter(email__iexact=email).first()
+        if not user or not user.check_password(password):
             raise serializers.ValidationError(serializers.ErrorDetail(_("Invalid credentials."), code="invalid_credentials"))
 
         attrs["user"] = user
@@ -98,16 +97,13 @@ class ChangeEmailSerializer(serializers.Serializer):
 
 
 class ChangePhoneSerializer(serializers.Serializer):
-    new_phone = serializers.CharField(required=False, allow_blank=True, allow_null=True)
-    code = serializers.CharField(min_length=6, max_length=6)
+    new_phone = serializers.CharField(required=False, allow_blank=True, allow_null=True, max_length=32)
 
     def validate_new_phone(self, value):
-        if not value:
+        if value is None:
             return None
-        try:
-            return normalize_phone(value)
-        except ValueError as exc:
-            raise serializers.ValidationError(serializers.ErrorDetail(str(exc), code="invalid_phone")) from exc
+        phone = value.strip()
+        return phone or None
 
 
 class ChangePasswordSerializer(serializers.Serializer):

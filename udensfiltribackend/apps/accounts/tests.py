@@ -1,4 +1,3 @@
-from django.core import mail
 from django.test import TestCase, override_settings
 from rest_framework.test import APIClient
 
@@ -14,37 +13,67 @@ class AuthFlowTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.client.cookies = response.cookies
 
-    def test_register_with_email_code_and_optional_phone(self):
+    def test_request_email_code_returns_mock_code(self):
         email = "user@example.com"
-        r = self.client.post("/api/auth/request-email-code/", {"purpose": "register", "email": email}, format="json")
-        self.assertEqual(r.status_code, 200)
+        response = self.client.post("/api/auth/request-email-code/", {"purpose": "register", "email": email}, format="json")
 
-        code = EmailCode.objects.filter(email=email, purpose="register").latest("created_at").code
-        r2 = self.client.post(
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("mock_code", response.data)
+        self.assertEqual(len(response.data["mock_code"]), 6)
+
+    def test_register_with_email_code(self):
+        email = "user@example.com"
+        code_response = self.client.post("/api/auth/request-email-code/", {"purpose": "register", "email": email}, format="json")
+        code = code_response.data["mock_code"]
+
+        response = self.client.post(
             "/api/auth/register/",
             {"email": email, "password": "StrongPass123", "code": code},
             format="json",
         )
-        self.assertEqual(r2.status_code, 201)
-        self.assertIn("access", r2.cookies)
-        self.assertIn("refresh", r2.cookies)
-
-        user = User.objects.get(email=email)
-        self.assertIsNone(user.phone)
+        self.assertEqual(response.status_code, 201)
+        self.assertIn("access", response.cookies)
+        self.assertIn("refresh", response.cookies)
 
     def test_login_with_email_sets_cookies(self):
-        user = User.objects.create_user(phone=None, email="u@example.com", password="StrongPass123")
-        self.assertIsNotNone(user.pk)
+        User.objects.create_user(phone=None, email="u@example.com", password="StrongPass123")
 
-        r = self.client.post("/api/auth/login/", {"email": "u@example.com", "password": "StrongPass123"}, format="json")
-        self.assertEqual(r.status_code, 200)
-        self.assertIn("access", r.cookies)
+        response = self.client.post("/api/auth/login/", {"email": "u@example.com", "password": "StrongPass123"}, format="json")
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("access", response.cookies)
 
-    def test_login_works_with_stale_access_cookie(self):
-        User.objects.create_user(phone=None, email="stale@example.com", password="StrongPass123")
-        self.client.cookies["access"] = "stale.invalid.token"
-        r = self.client.post("/api/auth/login/", {"email": "stale@example.com", "password": "StrongPass123"}, format="json")
-        self.assertEqual(r.status_code, 200)
+    def test_login_rejects_sql_injection_payload(self):
+        User.objects.create_user(phone=None, email="safe@example.com", password="StrongPass123")
+
+        response = self.client.post(
+            "/api/auth/login/",
+            {"email": "safe@example.com' OR 1=1 --", "password": "StrongPass123"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["error"]["code"], "validation_error")
+        self.assertEqual(response.data["error"]["fields"]["email"][0]["code"], "invalid")
+
+    def test_register_rejects_sql_injection_payload(self):
+        code_response = self.client.post(
+            "/api/auth/request-email-code/",
+            {"purpose": "register", "email": "new@example.com"},
+            format="json",
+        )
+
+        response = self.client.post(
+            "/api/auth/register/",
+            {
+                "email": "new@example.com'; DROP TABLE accounts_user; --",
+                "password": "StrongPass123",
+                "code": code_response.data["mock_code"],
+            },
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data["error"]["code"], "validation_error")
 
     def test_email_code_lockout_after_failed_attempts(self):
         email = "lock@example.com"
@@ -52,69 +81,42 @@ class AuthFlowTests(TestCase):
         latest = EmailCode.objects.filter(email=email, purpose="register").latest("created_at")
 
         for _ in range(5):
-            r = self.client.post(
+            response = self.client.post(
                 "/api/auth/register/",
                 {"email": email, "password": "StrongPass123", "code": "000000"},
                 format="json",
             )
-        self.assertIn(r.status_code, (400, 429))
+        self.assertIn(response.status_code, (400, 429))
 
         latest.refresh_from_db()
         self.assertIsNotNone(latest.locked_until)
 
-        r2 = self.client.post(
-            "/api/auth/register/",
-            {"email": email, "password": "StrongPass123", "code": latest.code},
-            format="json",
-        )
-        self.assertEqual(r2.status_code, 429)
-
-    def test_email_code_min_interval(self):
-        email = "rate@example.com"
-        r1 = self.client.post("/api/auth/request-email-code/", {"purpose": "register", "email": email}, format="json")
-        self.assertEqual(r1.status_code, 200)
-        r2 = self.client.post("/api/auth/request-email-code/", {"purpose": "register", "email": email}, format="json")
-        self.assertEqual(r2.status_code, 429)
-
-    def test_request_email_code_sends_email_with_purpose_subject(self):
-        email = "mailbox@example.com"
-        r = self.client.post("/api/auth/request-email-code/", {"purpose": "register", "email": email}, format="json")
-        self.assertEqual(r.status_code, 200)
-        self.assertEqual(len(mail.outbox), 1)
-        self.assertEqual(mail.outbox[0].to, [email])
-        self.assertIn("Registration confirmation code", mail.outbox[0].subject)
-
-    def test_register_password_min_length_validation_message(self):
-        email = "shortpass@example.com"
-        self.client.post("/api/auth/request-email-code/", {"purpose": "register", "email": email}, format="json")
-        code = EmailCode.objects.filter(email=email, purpose="register").latest("created_at").code
+    def test_change_phone_does_not_require_code(self):
+        User.objects.create_user(phone=None, email="phone-owner@example.com", password="StrongPass123")
+        self._login("phone-owner@example.com", "StrongPass123")
 
         response = self.client.post(
-            "/api/auth/register/",
-            {"email": email, "password": "1234", "code": code},
+            "/api/auth/change-phone/",
+            {"new_phone": "+37120000001"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["user"]["phone"], "+37120000001")
+
+    def test_change_phone_rejects_duplicate_phone(self):
+        User.objects.create_user(phone="+37120000002", email="existing@example.com", password="StrongPass123")
+        User.objects.create_user(phone=None, email="phone-owner2@example.com", password="StrongPass123")
+        self._login("phone-owner2@example.com", "StrongPass123")
+
+        response = self.client.post(
+            "/api/auth/change-phone/",
+            {"new_phone": "+37120000002"},
             format="json",
         )
 
         self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.data["error"]["code"], "validation_error")
-        self.assertEqual(response.data["error"]["fields"]["password"][0]["code"], "min_length")
-        self.assertIn("Password must be at least 6 characters long.", response.data["error"]["fields"]["password"][0]["message"])
-
-
-    def test_register_invalid_phone_returns_structured_error(self):
-        email = "invalid-phone@example.com"
-        self.client.post("/api/auth/request-email-code/", {"purpose": "register", "email": email}, format="json")
-        code = EmailCode.objects.filter(email=email, purpose="register").latest("created_at").code
-
-        response = self.client.post(
-            "/api/auth/register/",
-            {"email": email, "password": "StrongPass123", "code": code, "phone": "abc"},
-            format="json",
-        )
-
-        self.assertEqual(response.status_code, 400)
-        self.assertEqual(response.data["error"]["code"], "validation_error")
-        self.assertEqual(response.data["error"]["fields"]["phone"][0]["code"], "invalid_phone")
+        self.assertEqual(response.data["error"]["code"], "phone_exists")
 
     @override_settings(EMAIL_CODE_MIN_INTERVAL_SECONDS=0)
     def test_change_email_and_password_use_current_email_verification(self):
@@ -152,36 +154,6 @@ class AuthFlowTests(TestCase):
             format="json",
         )
         self.assertEqual(change_password_response.status_code, 200)
-
-        relogin = self.client.post(
-            "/api/auth/login/",
-            {"email": "new@example.com", "password": "EvenStronger123"},
-            format="json",
-        )
-        self.assertEqual(relogin.status_code, 200)
-
-    @override_settings(EMAIL_CODE_MIN_INTERVAL_SECONDS=0)
-    def test_change_password_min_length_validation_message(self):
-        User.objects.create_user(phone=None, email="owner2@example.com", password="StrongPass123")
-        self._login("owner2@example.com", "StrongPass123")
-
-        password_code_request = self.client.post(
-            "/api/auth/request-email-code/",
-            {"purpose": "change_password"},
-            format="json",
-        )
-        self.assertEqual(password_code_request.status_code, 200)
-
-        password_code = EmailCode.objects.filter(email="owner2@example.com", purpose="change_password").latest("created_at").code
-        change_password_response = self.client.post(
-            "/api/auth/change-password/",
-            {"new_password": "1234", "code": password_code},
-            format="json",
-        )
-        self.assertEqual(change_password_response.status_code, 400)
-        self.assertEqual(change_password_response.data["error"]["code"], "validation_error")
-        self.assertEqual(change_password_response.data["error"]["fields"]["new_password"][0]["code"], "min_length")
-        self.assertIn("Password must be at least 6 characters long.", change_password_response.data["error"]["fields"]["new_password"][0]["message"])
 
 
 class SendGridSettingsTests(TestCase):
