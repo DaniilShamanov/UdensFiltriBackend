@@ -1,36 +1,11 @@
 import random
 from datetime import timedelta
 
-import phonenumbers
 from django.conf import settings
-from django.core.mail import send_mail
 from django.utils import timezone
 from django.utils.translation import gettext_lazy as _
 
 from .models import EmailCode
-
-
-VERIFICATION_SUBJECTS = {
-    "register": "Registration confirmation code",
-    "change_email": "Email change confirmation code",
-    "change_password": "Password change confirmation code",
-    "change_phone": "Profile update confirmation code",
-}
-
-
-def normalize_phone(phone: str) -> str:
-    phone = (phone or "").strip()
-    if not phone:
-        raise ValueError(_("Phone is required."))
-
-    try:
-        region = None if phone.startswith("+") else "LV"
-        parsed = phonenumbers.parse(phone, region)
-        if not phonenumbers.is_valid_number(parsed):
-            raise ValueError(_("Invalid phone number."))
-        return phonenumbers.format_number(parsed, phonenumbers.PhoneNumberFormat.E164)
-    except Exception as exc:
-        raise ValueError(_("Invalid phone number.")) from exc
 
 
 def create_email_code(email: str, purpose: str, ttl_minutes: int = 10) -> EmailCode:
@@ -47,15 +22,4 @@ def create_email_code(email: str, purpose: str, ttl_minutes: int = 10) -> EmailC
         failed_attempts=0,
         locked_until=None,
         expires_at=timezone.now() + timedelta(minutes=ttl_minutes),
-    )
-
-
-def send_verification_email(email: str, code: str, purpose: str) -> None:
-    subject = VERIFICATION_SUBJECTS.get(purpose, "Confirmation code")
-    send_mail(
-        subject=subject,
-        message=f"Your confirmation code is: {code}",
-        from_email=settings.DEFAULT_FROM_EMAIL,
-        recipient_list=[email],
-        fail_silently=False,
     )

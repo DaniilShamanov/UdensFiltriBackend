@@ -73,7 +73,6 @@ class EmailCode(models.Model):
     PURPOSE_CHOICES = [
         ("register", "register"),
         ("change_email", "change_email"),
-        ("change_phone", "change_phone"),
         ("change_password", "change_password"),
     ]
 

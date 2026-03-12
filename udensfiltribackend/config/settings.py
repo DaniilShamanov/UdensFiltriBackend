@@ -159,6 +159,7 @@ DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "no-reply@example.com")
 ADMIN_NOTIFICATION_EMAILS = [e.strip() for e in env("ADMIN_NOTIFICATION_EMAILS", "").split(",") if e.strip()]
 
 EMAIL_CODE_MIN_INTERVAL_SECONDS = int(env("EMAIL_CODE_MIN_INTERVAL_SECONDS", "60"))
+EMAIL_CODE_MOCK_MODE = env("EMAIL_CODE_MOCK_MODE", "1" if DEBUG else "0") == "1"
 
 
 LOG_DIR = BASE_DIR / "logs"
