@@ -7,6 +7,7 @@ from django.middleware.csrf import get_token
 from django.utils import timezone
 from django.utils.translation import gettext as _
 from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.exceptions import ValidationError
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.exceptions import TokenError
@@ -33,6 +34,17 @@ def _error_response(code: str, message: str, status_code: int, fields=None):
     if fields:
         payload["error"]["fields"] = fields
     return Response(payload, status=status_code)
+
+
+def _plain_error_response(message: str, status_code: int):
+    return Response(str(message), status=status_code)
+
+
+def _is_email_registered(email: str, excluded_user_id: Optional[int] = None) -> bool:
+    users = User.objects.filter(email__iexact=email)
+    if excluded_user_id is not None:
+        users = users.exclude(pk=excluded_user_id)
+    return users.exists()
 
 
 @api_view(["GET"])
@@ -78,13 +90,33 @@ def _verify_and_consume_code(email: str, purpose: str, code: str):
 @throttle_classes([CodeIPThrottle, CodeEmailThrottle])
 def request_email_code(request):
     ser = RequestEmailCodeSerializer(data=request.data, context={"request": request})
-    ser.is_valid(raise_exception=True)
-    email = ser.validated_data["email"]
-    purpose = ser.validated_data["purpose"]
     try:
+        ser.is_valid(raise_exception=True)
+        email = ser.validated_data["email"]
+        purpose = ser.validated_data["purpose"]
+
+        if purpose == "register" and _is_email_registered(email):
+            return _plain_error_response(_("This email is already registered."), 400)
+
         code_obj = create_email_code(email, purpose)
+    except ValidationError as exc:
+        detail = exc.detail
+        if isinstance(detail, dict):
+            messages = []
+            for field, value in detail.items():
+                field_messages = value if isinstance(value, list) else [value]
+                messages.extend(f"{field}: {item}" for item in field_messages)
+            message = "; ".join(messages)
+        elif isinstance(detail, list):
+            message = "; ".join(str(item) for item in detail)
+        else:
+            message = str(detail)
+        return _plain_error_response(message or _("Validation failed."), 400)
     except ValueError as exc:
-        return _error_response("code_rate_limited", str(exc), 429)
+        return _plain_error_response(str(exc), 429)
+    except Exception:
+        return _plain_error_response(_("Failed to request email code. Please try again."), 500)
+
     if getattr(settings, "EMAIL_CODE_MOCK_MODE", False):
         return Response({"ok": True, "mock_code": code_obj.code})
     return Response({"ok": True})
@@ -101,7 +133,7 @@ def register(request):
         status_code = 429 if reason == "locked" else 400
         return _error_response("invalid_code", _("Invalid or expired code."), status_code)
 
-    if User.objects.filter(email__iexact=email).exists():
+    if _is_email_registered(email):
         return _error_response("email_exists", _("User with this email already exists."), 400)
 
     user = User.objects.create_user(
@@ -179,16 +211,16 @@ def profile(request):
 def change_email(request):
     ser = ChangeEmailSerializer(data=request.data)
     ser.is_valid(raise_exception=True)
-    if not request.user.new_email:
+    if not request.user.email:
         return _error_response("missing_email", _("User email is not set."), 400)
 
-    ok, reason = _verify_and_consume_code(request.user.new_email.lower(), "change_email", ser.validated_data["code"])
+    ok, reason = _verify_and_consume_code(request.user.email.lower(), "change_email", ser.validated_data["code"])
     if not ok:
         status_code = 429 if reason == "locked" else 400
         return _error_response("invalid_code", _("Invalid or expired code."), status_code)
 
     new_email = ser.validated_data["new_email"].strip().lower()
-    if User.objects.filter(email__iexact=new_email).exclude(pk=request.user.pk).exists():
+    if _is_email_registered(new_email, excluded_user_id=request.user.pk):
         return _error_response("email_exists", _("User with this email already exists."), 400)
 
     request.user.email = new_email
