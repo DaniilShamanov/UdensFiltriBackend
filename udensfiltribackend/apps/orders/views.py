@@ -23,9 +23,28 @@ def list_delivery_options(request):
     return Response(DeliveryOptionSerializer(qs, many=True).data)
 
 
-@api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@api_view(["GET", "POST"])
+@permission_classes([AllowAny])
 def list_orders(request):
+    if request.method == "POST":
+        ser = CreateCheckoutSerializer(data=request.data, context={"request": request})
+        ser.is_valid(raise_exception=True)
+
+        order = Order.objects.create(
+            user=request.user if request.user.is_authenticated else None,
+            items=ser.validated_data["items"],
+            total_cents=ser.validated_data["total_cents"],
+            currency=ser.validated_data["currency"],
+            email=ser.validated_data["email"],
+            customer_name=ser.validated_data["customer_name"],
+            customer_address=ser.validated_data["customer_address"],
+            delivery_option=ser.validated_data["delivery_option"],
+        )
+        return Response(OrderSerializer(order).data, status=201)
+
+    if not request.user.is_authenticated:
+        return Response({"detail": "Authentication credentials were not provided."}, status=401)
+
     qs = Order.objects.all().order_by("-created_at") if request.user.is_superuser else Order.objects.filter(user=request.user).order_by("-created_at")
     return Response(OrderSerializer(qs, many=True).data)
 
