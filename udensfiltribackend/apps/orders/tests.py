@@ -107,6 +107,45 @@ class StripeFlowTests(TestCase):
         order.refresh_from_db()
         self.assertEqual(order.status, "paid")
 
+
+    def test_create_order_endpoint_for_guest(self):
+        product = Product.objects.create(name="Direct order item", slug="direct-order-item", price_cents=1300, currency="EUR", is_active=True)
+        payload = {
+            "items": [{"product_id": product.id, "qty": 2}],
+            "currency": "EUR",
+            "email": "guest-order@example.com",
+            "customer_name": "Guest Order",
+            "customer_address": "Riga, Guest 1",
+            "delivery_option_id": self.delivery.id,
+        }
+
+        r = self.client.post("/api/orders/create/", payload, format="json")
+
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.data["email"], "guest-order@example.com")
+        self.assertEqual(r.data["total_cents"], 3100)
+        created = Order.objects.get(id=r.data["id"])
+        self.assertIsNone(created.user)
+
+    def test_create_order_endpoint_for_authenticated_user(self):
+        self._auth_client()
+        product = Product.objects.create(name="Auth order item", slug="auth-order-item", price_cents=1000, currency="EUR", is_active=True)
+        payload = {
+            "items": [{"product_id": product.id, "qty": 1}],
+            "currency": "EUR",
+            "email": "u@example.com",
+            "customer_name": "User",
+            "customer_address": "Riga, Auth 1",
+            "delivery_option_id": self.delivery.id,
+        }
+
+        r = self.client.post("/api/orders/create/", payload, format="json")
+
+        self.assertEqual(r.status_code, 201)
+        created = Order.objects.get(id=r.data["id"])
+        self.assertEqual(created.user_id, self.user.id)
+        self.assertEqual(created.total_cents, 1500)
+
     @patch("apps.orders.views.stripe.checkout.Session.create")
     def test_checkout_rejects_client_price_fields(self, mock_create):
         payload = {

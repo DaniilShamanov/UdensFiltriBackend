@@ -9,7 +9,7 @@ from rest_framework.response import Response
 
 from .emailing import send_order_paid_email
 from .models import DeliveryOption, Order
-from .serializers import CreateCheckoutSerializer, DeliveryOptionSerializer, OrderSerializer
+from .serializers import CreateCheckoutSerializer, CreateOrderSerializer, DeliveryOptionSerializer, OrderSerializer
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,28 @@ def get_order(request, order_id: int):
     return Response(OrderSerializer(order).data)
 
 
+def _create_order_from_validated_data(request, validated_data):
+    return Order.objects.create(
+        user=request.user if request.user.is_authenticated else None,
+        items=validated_data["items"],
+        total_cents=validated_data["total_cents"],
+        currency=validated_data.get("currency", "EUR"),
+        email=validated_data["email"],
+        customer_name=validated_data["customer_name"],
+        customer_address=validated_data["customer_address"],
+        delivery_option=validated_data["delivery_option"],
+    )
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
+def create_order(request):
+    ser = CreateOrderSerializer(data=request.data, context={"request": request})
+    ser.is_valid(raise_exception=True)
+
+    order = _create_order_from_validated_data(request, ser.validated_data)
+    return Response(OrderSerializer(order).data, status=201)
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
 def create_checkout_session(request):
@@ -54,15 +76,17 @@ def create_checkout_session(request):
     customer_address = ser.validated_data["customer_address"]
     delivery_option = ser.validated_data["delivery_option"]
 
-    order = Order.objects.create(
-        user=request.user if request.user.is_authenticated else None,
-        items=items,
-        total_cents=total,
-        currency=currency,
-        email=email,
-        customer_name=customer_name,
-        customer_address=customer_address,
-        delivery_option=delivery_option,
+    order = _create_order_from_validated_data(
+        request,
+        {
+            "items": items,
+            "total_cents": total,
+            "currency": currency,
+            "email": email,
+            "customer_name": customer_name,
+            "customer_address": customer_address,
+            "delivery_option": delivery_option,
+        },
     )
 
     line_items = [

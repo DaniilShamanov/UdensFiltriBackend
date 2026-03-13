@@ -142,3 +142,7 @@ class CreateCheckoutSerializer(serializers.Serializer):
         attrs["delivery_option"] = delivery_option
         attrs["total_cents"] = self.context.get("items_total_cents", 0) + delivery_option.price_cents
         return attrs
+
+
+class CreateOrderSerializer(CreateCheckoutSerializer):
+    pass
