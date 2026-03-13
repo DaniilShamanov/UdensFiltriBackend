@@ -179,10 +179,10 @@ def profile(request):
 def change_email(request):
     ser = ChangeEmailSerializer(data=request.data)
     ser.is_valid(raise_exception=True)
-    if not request.user.email:
+    if not request.user.new_email:
         return _error_response("missing_email", _("User email is not set."), 400)
 
-    ok, reason = _verify_and_consume_code(request.user.email.lower(), "change_email", ser.validated_data["code"])
+    ok, reason = _verify_and_consume_code(request.user.new_email.lower(), "change_email", ser.validated_data["code"])
     if not ok:
         status_code = 429 if reason == "locked" else 400
         return _error_response("invalid_code", _("Invalid or expired code."), status_code)
