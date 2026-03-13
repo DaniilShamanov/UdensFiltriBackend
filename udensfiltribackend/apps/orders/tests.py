@@ -121,6 +121,28 @@ class StripeFlowTests(TestCase):
         self.assertEqual(r.status_code, 400)
         mock_create.assert_not_called()
 
+
+    def test_create_order_endpoint_creates_order(self):
+        product = Product.objects.create(name="Direct order item", slug="direct-order-item", price_cents=900, currency="EUR", is_active=True)
+        payload = {
+            "items": [{"product_id": product.id, "qty": 2}],
+            "currency": "EUR",
+            "email": "direct@example.com",
+            "customer_name": "Direct Buyer",
+            "customer_address": "Riga, Brivibas 11",
+            "delivery_option_id": self.delivery.id,
+        }
+
+        r = self.client.post("/api/orders/", payload, format="json")
+        self.assertEqual(r.status_code, 201)
+        self.assertEqual(r.data["status"], "created")
+        self.assertEqual(r.data["total_cents"], 2300)
+        self.assertEqual(Order.objects.filter(email="direct@example.com").count(), 1)
+
+    def test_get_orders_requires_authentication(self):
+        r = self.client.get("/api/orders/")
+        self.assertEqual(r.status_code, 401)
+
     def test_lists_delivery_options(self):
         r = self.client.get("/api/orders/delivery-options/")
         self.assertEqual(r.status_code, 200)
