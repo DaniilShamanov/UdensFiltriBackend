@@ -21,6 +21,28 @@ class AuthFlowTests(TestCase):
         self.assertIn("mock_code", response.data)
         self.assertEqual(len(response.data["mock_code"]), 6)
 
+    def test_request_email_code_blocks_registered_email_for_signup(self):
+        User.objects.create_user(phone=None, email="registered@example.com", password="StrongPass123")
+
+        response = self.client.post(
+            "/api/auth/request-email-code/",
+            {"purpose": "register", "email": "registered@example.com"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data, "This email is already registered.")
+
+    def test_request_email_code_returns_plain_text_validation_errors(self):
+        response = self.client.post(
+            "/api/auth/request-email-code/",
+            {"purpose": "register"},
+            format="json",
+        )
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(response.data, "email: Email is required.")
+
     def test_register_with_email_code(self):
         email = "user@example.com"
         code_response = self.client.post("/api/auth/request-email-code/", {"purpose": "register", "email": email}, format="json")
