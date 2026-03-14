@@ -25,7 +25,7 @@ class Order(models.Model):
     email = models.EmailField()
     customer_name = models.CharField(max_length=200)
     customer_address = models.CharField(max_length=500)
-    delivery_option = models.ForeignKey(DeliveryOption, on_delete=models.PROTECT, related_name="orders", null=True, blank=True)
+    delivery_option_id = models.ForeignKey(DeliveryOption, on_delete=models.PROTECT, related_name="orders", null=True, blank=True)
     currency = models.CharField(max_length=8, default="EUR")
     total_cents = models.PositiveIntegerField(default=0)
     items = models.JSONField(default=list)

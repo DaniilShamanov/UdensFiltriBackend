@@ -27,21 +27,86 @@ def list_delivery_options(request):
 @permission_classes([AllowAny])
 def list_orders(request):
     if request.method == "POST":
-        ser = CreateCheckoutSerializer(data=request.data, context={"request": request})
+        data = request.data.copy()
+
+        # 1. Get delivery_option_id from request
+        delivery_option_id = data.get('delivery_option_id')
+        if not delivery_option_id:
+            return Response({"error": "Delivery option is required"}, status=400)
+
+        # Optional: verify the ID exists (the serializer's ForeignKey will also validate)
+        try:
+            delivery_option = DeliveryOption.objects.get(id=delivery_option_id)
+        except DeliveryOption.DoesNotExist:
+            return Response({"error": "Invalid delivery option ID"}, status=400)
+
+        # 2. Set the delivery_option_id in data for serializer
+        data['delivery_option_id'] = delivery_option_id
+
+        # 3. Compute total_cents from items
+        items = data.get('items', [])
+        total_cents = 0
+        for item in items:
+            unit_price = item.get('unit_price')
+            if unit_price is None:
+                return Response({"error": "Each item must have unit_price"}, status=400)
+            total_cents += int(unit_price * 100) * item['quantity']
+        data['total_cents'] = total_cents
+        data['currency'] = 'EUR'
+
+        # 4. Associate user if authenticated
+        if request.user.is_authenticated:
+            data['user'] = request.user.id
+
+        # 5. Validate and create order using serializer
+        ser = CreateCheckoutSerializer(data=data, context={"request": request})
         ser.is_valid(raise_exception=True)
+        order = ser.save()
 
-        order = Order.objects.create(
-            user=request.user if request.user.is_authenticated else None,
-            items=ser.validated_data["items"],
-            total_cents=ser.validated_data["total_cents"],
-            currency=ser.validated_data["currency"],
-            email=ser.validated_data["email"],
-            customer_name=ser.validated_data["customer_name"],
-            customer_address=ser.validated_data["customer_address"],
-            delivery_option=ser.validated_data["delivery_option"],
-        )
-        return Response(OrderSerializer(order).data, status=201)
+        # 6. Build Stripe line items
+        line_items = []
+        for item in items:
+            line_items.append({
+                'price_data': {
+                    'currency': 'eur',
+                    'product_data': {'name': item['title']},
+                    'unit_amount': int(item['unit_price'] * 100),
+                },
+                'quantity': item['quantity'],
+            })
 
+        # 7. Construct success/cancel URLs
+        locale = data.get('locale', 'en')
+        success_path = data.get('success_path', '/payment/status')
+        cancel_path = data.get('cancel_path', '/checkout')
+        base_url = settings.FRONTEND_BASE_URL.rstrip('/')
+        success_url = f"{base_url}/{locale}{success_path}/{order.id}?session_id={{CHECKOUT_SESSION_ID}}"
+        cancel_url = f"{base_url}/{locale}{cancel_path}"
+
+        # 8. Create Stripe session
+        try:
+            session = stripe.checkout.Session.create(
+                payment_method_types=['card'],
+                line_items=line_items,
+                mode='payment',
+                success_url=success_url,
+                cancel_url=cancel_url,
+                customer_email=data.get('email'),
+                metadata={'order_id': str(order.id)},
+            )
+        except stripe.error.StripeError as e:
+            order.delete()
+            return Response({"error": str(e)}, status=400)
+
+        order.stripe_session_id = session.id
+        order.save(update_fields=['stripe_session_id'])
+
+        return Response({
+            'checkout_url': session.url,
+            'order_id': order.id,
+        }, status=201)
+
+    # GET (list orders) – unchanged
     if not request.user.is_authenticated:
         return Response({"detail": "Authentication credentials were not provided."}, status=401)
 
