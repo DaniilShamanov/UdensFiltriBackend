@@ -129,13 +129,25 @@ def list_orders(request):
 
 
 @api_view(["GET"])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])  # change from IsAuthenticated
 def get_order(request, order_id: int):
     try:
-        order = Order.objects.get(id=order_id) if request.user.is_superuser else Order.objects.get(id=order_id, user=request.user)
+        order = Order.objects.get(id=order_id)
     except Order.DoesNotExist:
         return Response({"detail": "Not found"}, status=404)
-    return Response(OrderSerializer(order).data)
+
+    # If user is authenticated, check ownership
+    if request.user.is_authenticated:
+        if not request.user.is_superuser and order.user != request.user:
+            return Response({"detail": "Permission denied"}, status=403)
+    else:
+        # Unauthenticated: require a valid session_id that matches the order's stripe_session_id
+        session_id = request.query_params.get('session_id')
+        if not session_id or order.stripe_session_id != session_id:
+            return Response({"detail": "Permission denied"}, status=403)
+
+    serializer = OrderSerializer(order)
+    return Response(serializer.data)
 
 
 @api_view(["POST"])
@@ -244,16 +256,15 @@ def stripe_webhook(request):
 
         # Update order status and Stripe fields
         order.status = "paid"
-        order.save(update_fields=["status", ...])
-        send_invoice_email(order)  # <-- Add this line
-        logger.info(f"Order {order_id} updated to paid and invoice email sent.")
+        order.stripe_session_id = session.get("id", "")          # store session ID if not already
+        order.stripe_payment_intent_id = session.get("payment_intent", "")
+        order.save(update_fields=["status", "stripe_session_id", "stripe_payment_intent_id"])
 
-        # Optional: trigger post‑payment actions (e.g., send email)
-        # send_order_paid_email(order)
-
-        logger.info(f"Order {order_id} updated to paid")
-
-    # You can handle other event types here if needed
-    # elif event["type"] == "payment_intent.succeeded": ...
+        # Send invoice email
+        try:
+            send_invoice_email(order)
+            logger.info(f"Order {order_id} updated to paid and invoice email sent.")
+        except Exception as e:
+            logger.exception(f"Failed to send invoice email for order {order_id}: {e}")
 
     return HttpResponse(status=200)

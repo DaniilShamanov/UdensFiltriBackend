@@ -166,7 +166,7 @@ def refresh(request):
 
 
 @api_view(["POST"])
-@permission_classes([IsAuthenticated])
+@permission_classes([AllowAny])
 def logout(request):
     resp = Response({"ok": True})
     clear_auth_cookies(resp)
@@ -241,6 +241,56 @@ def change_password(request):
     resp = Response({"ok": True})
     clear_auth_cookies(resp)
     return resp
+
+
+@api_view(['POST'])
+@permission_classes([AllowAny])
+def reset_password(request):
+    email = request.data.get('email')
+    code = request.data.get('code')
+    new_password = request.data.get('new_password')
+
+    if not email or not code or not new_password:
+        return Response({'error': 'email, code and new_password are required'}, status=400)
+
+    # Find the most recent valid code for this email with purpose 'reset_password'
+    try:
+        code_record = EmailCode.objects.filter(
+            email=email,
+            purpose='reset_password',
+            consumed_at__isnull=True,
+            expires_at__gt=timezone.now()
+        ).latest('created_at')
+    except EmailCode.DoesNotExist:
+        return Response({'error': 'No valid code found. Request a new one.'}, status=400)
+
+    if code_record.is_locked:
+        return Response({'error': 'Too many attempts. Try again later.'}, status=429)
+
+    if code_record.code != code:
+        code_record.failed_attempts += 1
+        if code_record.failed_attempts >= 5:
+            code_record.lock(seconds=300)
+        code_record.save(update_fields=['failed_attempts', 'locked_until'])
+        return Response({'error': 'Invalid code'}, status=400)
+
+    # Code correct – mark as consumed
+    code_record.consume()
+
+    # Find the user by email
+    try:
+        user = User.objects.get(email=email)
+    except User.DoesNotExist:
+        return Response({'error': 'User not found'}, status=404)
+
+    # Set new password
+    user.set_password(new_password)
+    user.save(update_fields=['password'])
+
+    # Optionally, log the user out everywhere by rotating tokens or clearing sessions.
+    # For simplicity, we just return success. The frontend should redirect to login.
+
+    return Response({'message': 'Password reset successfully'})
 
 
 @api_view(["POST"])
