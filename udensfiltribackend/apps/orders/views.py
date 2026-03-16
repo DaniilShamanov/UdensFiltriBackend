@@ -2,13 +2,15 @@ import logging
 
 import stripe
 from django.conf import settings
+from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 
-from .emailing import send_order_paid_email
+from .utils import send_invoice_email
 from .models import DeliveryOption, Order
+from apps.catalog.models import Product
 from .serializers import CreateCheckoutSerializer, DeliveryOptionSerializer, OrderSerializer
 
 logger = logging.getLogger(__name__)
@@ -36,8 +38,8 @@ def list_orders(request):
 
         # Optional: verify the ID exists (the serializer's ForeignKey will also validate)
         try:
-            delivery_option = DeliveryOption.objects.get(id=delivery_option_id)
-        except DeliveryOption.DoesNotExist:
+            delivery_option_id = int(data.get('delivery_option_id'))
+        except (TypeError, ValueError):
             return Response({"error": "Invalid delivery option ID"}, status=400)
 
         # 2. Set the delivery_option_id in data for serializer
@@ -61,7 +63,19 @@ def list_orders(request):
         # 5. Validate and create order using serializer
         ser = CreateCheckoutSerializer(data=data, context={"request": request})
         ser.is_valid(raise_exception=True)
-        order = ser.save()
+        #order = ser.save()
+        order = Order.objects.create(
+            user=request.user if request.user.is_authenticated else None,
+            email=ser.validated_data['email'],
+            phone=ser.validated_data.get('phone', ''),                     # optional
+            customer_name=ser.validated_data['customer_name'],
+            customer_address=ser.validated_data['customer_address'],
+            delivery_option=ser.validated_data['delivery_option'],         # the DeliveryOption object
+            currency=ser.validated_data['currency'],
+            total_cents=ser.validated_data['total_cents'],
+            items=ser.validated_data['items'],                             # normalized items
+            status='created',
+        )
 
         # 6. Build Stripe line items
         line_items = []
@@ -102,8 +116,8 @@ def list_orders(request):
         order.save(update_fields=['stripe_session_id'])
 
         return Response({
-            'checkout_url': session.url,
-            'order_id': order.id,
+            'checkoutUrl': session.url,
+            'orderId': order.id,
         }, status=201)
 
     # GET (list orders) – unchanged
@@ -189,32 +203,57 @@ def create_checkout_session(request):
 @csrf_exempt
 @api_view(["POST"])
 @permission_classes([AllowAny])
-def webhook(request):
+def stripe_webhook(request):
     payload = request.body
-    sig = request.META.get("HTTP_STRIPE_SIGNATURE", "")
-    try:
-        event = stripe.Webhook.construct_event(payload, sig, settings.STRIPE_WEBHOOK_SECRET)
-    except ValueError:
-        logger.warning("Stripe webhook payload parse failure")
-        return Response({"detail": "invalid payload"}, status=400)
-    except stripe.error.SignatureVerificationError:
-        logger.warning("Stripe webhook signature verification failed")
-        return Response({"detail": "invalid signature"}, status=400)
+    sig_header = request.META.get("HTTP_STRIPE_SIGNATURE", "")
+    webhook_secret = settings.STRIPE_WEBHOOK_SECRET
 
+    if not webhook_secret:
+        logger.error("STRIPE_WEBHOOK_SECRET is not set")
+        return HttpResponse(status=500)
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload, sig_header, webhook_secret
+        )
+    except ValueError:
+        # Invalid payload
+        logger.warning("Invalid Stripe webhook payload")
+        return HttpResponse(status=400)
+    except stripe.error.SignatureVerificationError:
+        # Invalid signature
+        logger.warning("Invalid Stripe webhook signature")
+        return HttpResponse(status=400)
+
+    # Handle the event
     if event["type"] == "checkout.session.completed":
-        data = event["data"]["object"]
-        order_id = data.get("metadata", {}).get("order_id")
-        session_id = data.get("id", "")
-        payment_intent = data.get("payment_intent", "")
-        if order_id:
-            try:
-                order = Order.objects.get(id=int(order_id))
-                if order.status != "paid":
-                    order.status = "paid"
-                    order.stripe_session_id = session_id or order.stripe_session_id
-                    order.stripe_payment_intent_id = payment_intent or order.stripe_payment_intent_id
-                    order.save(update_fields=["status", "stripe_session_id", "stripe_payment_intent_id"])
-                    send_order_paid_email(order)
-            except Order.DoesNotExist:
-                pass
-    return Response({"ok": True})
+        session = event["data"]["object"]
+        logger.info(f"Checkout session completed: {session['id']}")
+
+        # Extract order_id from metadata (must match what you set when creating the session)
+        order_id = session.get("metadata", {}).get("order_id")
+        if not order_id:
+            logger.error("No order_id in session metadata")
+            return HttpResponse(status=200)  # Still acknowledge receipt
+
+        try:
+            order = Order.objects.get(id=int(order_id))
+        except Order.DoesNotExist:
+            logger.error(f"Order with id {order_id} not found")
+            return HttpResponse(status=200)  # Acknowledge but log
+
+        # Update order status and Stripe fields
+        order.status = "paid"
+        order.save(update_fields=["status", ...])
+        send_invoice_email(order)  # <-- Add this line
+        logger.info(f"Order {order_id} updated to paid and invoice email sent.")
+
+        # Optional: trigger post‑payment actions (e.g., send email)
+        # send_order_paid_email(order)
+
+        logger.info(f"Order {order_id} updated to paid")
+
+    # You can handle other event types here if needed
+    # elif event["type"] == "payment_intent.succeeded": ...
+
+    return HttpResponse(status=200)

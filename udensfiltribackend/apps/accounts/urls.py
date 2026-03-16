@@ -2,8 +2,8 @@ from django.urls import path
 from . import views
 
 urlpatterns = [
-    path("request-email-code/", views.request_email_code),
     path("register/", views.register),
+    path('send-code/', views.send_code),
     path("login/", views.login),
     path("refresh/", views.refresh),
     path("logout/", views.logout),

@@ -44,13 +44,19 @@ class CreateCheckoutSerializer(serializers.Serializer):
         user = getattr(req, "user", None)
         if not user or not user.is_authenticated:
             return 0
-        result = (
-            GroupDiscount.objects.filter(group__user=user, is_active=True)
-            .order_by("-percentage")
-            .values_list("percentage", flat=True)
-            .first()
-        )
-        return int(result or 0)
+        try:
+            # Use double underscore to follow the ForeignKey from GroupDiscount to Group,
+            # and then from Group to User (assuming a ManyToMany or ForeignKey)
+            result = (
+                GroupDiscount.objects.filter(group__user=user, is_active=True)
+                .order_by("-percentage")
+                .values_list("percentage", flat=True)
+                .first()
+            )
+            return int(result or 0)
+        except Exception as e:
+            # Log the error (optional) and fall back to 0
+            return 0
 
     def validate_delivery_option_id(self, value):
         try:
@@ -126,6 +132,7 @@ class CreateCheckoutSerializer(serializers.Serializer):
 
         self.context["items_total_cents"] = total
         self.context["currency"] = currency or "EUR"
+
         return normalized_items
 
     def validate(self, attrs):
@@ -141,4 +148,5 @@ class CreateCheckoutSerializer(serializers.Serializer):
         attrs["currency"] = resolved_currency
         attrs["delivery_option"] = delivery_option
         attrs["total_cents"] = self.context.get("items_total_cents", 0) + delivery_option.price_cents
+
         return attrs

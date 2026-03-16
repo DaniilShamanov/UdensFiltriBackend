@@ -1,13 +1,12 @@
+import random
 from datetime import timedelta
-from typing import Optional
 
 from django.conf import settings
 from django.http import JsonResponse
 from django.middleware.csrf import get_token
 from django.utils import timezone
 from django.utils.translation import gettext as _
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
-from rest_framework.exceptions import ValidationError
+from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework_simplejwt.exceptions import TokenError
@@ -22,104 +21,86 @@ from .serializers import (
     LoginSerializer,
     ProfileUpdateSerializer,
     RegisterSerializer,
-    RequestEmailCodeSerializer,
     UserSerializer,
 )
-from .throttles import CodeEmailThrottle, CodeIPThrottle
-from .utils import create_email_code
+from .utils import send_email, send_verification_email
 
-
-def _error_response(code: str, message: str, status_code: int, fields=None):
+def _error_response(code, message, status_code, fields=None):
     payload = {"error": {"code": code, "message": message}}
     if fields:
         payload["error"]["fields"] = fields
     return Response(payload, status=status_code)
 
 
-def _plain_error_response(message: str, status_code: int):
-    return Response(str(message), status=status_code)
-
-
-def _is_email_registered(email: str, excluded_user_id: Optional[int] = None) -> bool:
-    users = User.objects.filter(email__iexact=email)
-    if excluded_user_id is not None:
-        users = users.exclude(pk=excluded_user_id)
-    return users.exists()
-
-
-@api_view(["GET"])
-@permission_classes([AllowAny])
-def csrf_cookie(request):
-    token = get_token(request)
-    return JsonResponse({"csrfToken": token})
-
-
-def _issue_tokens(user: User):
+def _issue_tokens(user):
     refresh = RefreshToken.for_user(user)
     return str(refresh.access_token), str(refresh)
 
 
-def _get_latest_active_code(email: str, purpose: str) -> Optional[EmailCode]:
-    return (
-        EmailCode.objects.filter(email=email, purpose=purpose, consumed_at__isnull=True)
-        .order_by("-created_at")
-        .first()
-    )
-
-
-def _verify_and_consume_code(email: str, purpose: str, code: str):
-    obj = _get_latest_active_code(email, purpose)
-    if not obj:
+def _verify_and_consume_code(email, purpose, code):
+    """Returns (success, reason) where reason is 'ok' or error key."""
+    try:
+        obj = EmailCode.objects.filter(
+            email=email,
+            purpose=purpose,
+            consumed_at__isnull=True,
+            expires_at__gt=timezone.now()
+        ).latest('created_at')
+    except EmailCode.DoesNotExist:
         return False, "missing"
-    if timezone.now() >= obj.expires_at:
-        return False, "expired"
+
     if obj.is_locked:
         return False, "locked"
+
     if obj.code != code:
         obj.failed_attempts += 1
         if obj.failed_attempts >= 5:
             obj.locked_until = timezone.now() + timedelta(minutes=15)
-        obj.save(update_fields=["failed_attempts", "locked_until"])
+        obj.save(update_fields=['failed_attempts', 'locked_until'])
         return False, "invalid"
+
     obj.consume()
     return True, "ok"
 
 
+# ---------- Public endpoints ----------
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def csrf_cookie(request):
+    return JsonResponse({"csrfToken": get_token(request)})
+
+
 @api_view(["POST"])
 @permission_classes([AllowAny])
-@throttle_classes([CodeIPThrottle, CodeEmailThrottle])
-def request_email_code(request):
-    ser = RequestEmailCodeSerializer(data=request.data, context={"request": request})
-    try:
-        ser.is_valid(raise_exception=True)
-        email = ser.validated_data["email"]
-        purpose = ser.validated_data["purpose"]
+def send_code(request):
+    email = request.data.get('email')
+    purpose = request.data.get('purpose')
+    if not email or not purpose:
+        return _error_response("missing_fields", _("Email and purpose are required."), 400)
 
-        if purpose == "register" and _is_email_registered(email):
-            return _plain_error_response(_("This email is already registered."), 400)
+    # Optionally, check if email already exists for register purpose
+    if purpose == "register" and User.objects.filter(email__iexact=email).exists():
+        return _error_response("email_exists", _("Email already registered."), 400)
 
-        code_obj = create_email_code(email, purpose)
-    except ValidationError as exc:
-        detail = exc.detail
-        if isinstance(detail, dict):
-            messages = []
-            for field, value in detail.items():
-                field_messages = value if isinstance(value, list) else [value]
-                messages.extend(f"{field}: {item}" for item in field_messages)
-            message = "; ".join(messages)
-        elif isinstance(detail, list):
-            message = "; ".join(str(item) for item in detail)
-        else:
-            message = str(detail)
-        return _plain_error_response(message or _("Validation failed."), 400)
-    except ValueError as exc:
-        return _plain_error_response(str(exc), 429)
-    except Exception:
-        return _plain_error_response(_("Failed to request email code. Please try again."), 500)
+    # Invalidate any previous unused codes for this email/purpose
+    EmailCode.objects.filter(email=email, purpose=purpose, consumed_at__isnull=True).update(
+        consumed_at=timezone.now()
+    )
 
-    if getattr(settings, "EMAIL_CODE_MOCK_MODE", False):
-        return Response({"ok": True, "mock_code": code_obj.code})
-    return Response({"ok": True})
+    code = f"{random.randint(0, 999999):06d}"
+    EmailCode.objects.create(
+        email=email,
+        purpose=purpose,
+        code=code,
+        expires_at=timezone.now() + timedelta(minutes=10),
+    )
+
+    # Send email using your utility
+    send_verification_email(email, code, purpose)
+
+    print(123)
+
+    return Response({"message": _("Verification code sent.")})
 
 
 @api_view(["POST"])
@@ -127,14 +108,17 @@ def request_email_code(request):
 def register(request):
     ser = RegisterSerializer(data=request.data)
     ser.is_valid(raise_exception=True)
-    email = ser.validated_data["email"].lower()
-    ok, reason = _verify_and_consume_code(email, "register", ser.validated_data["code"])
-    if not ok:
-        status_code = 429 if reason == "locked" else 400
-        return _error_response("invalid_code", _("Invalid or expired code."), status_code)
 
-    if _is_email_registered(email):
-        return _error_response("email_exists", _("User with this email already exists."), 400)
+    email = ser.validated_data["email"].lower()
+    code = ser.validated_data["code"]
+
+    ok, reason = _verify_and_consume_code(email, "register", code)
+    if not ok:
+        status_map = {"missing": 400, "expired": 400, "invalid": 400, "locked": 429}
+        return _error_response("invalid_code", _("Invalid or expired code."), status_map.get(reason, 400))
+
+    if User.objects.filter(email__iexact=email).exists():
+        return _error_response("email_exists", _("Email already registered."), 400)
 
     user = User.objects.create_user(
         password=ser.validated_data["password"],
@@ -142,6 +126,10 @@ def register(request):
         first_name=ser.validated_data.get("first_name", ""),
         last_name=ser.validated_data.get("last_name", ""),
     )
+    # User is active immediately – no separate activation step.
+    user.is_active = True
+    user.save(update_fields=["is_active"])
+
     access, refresh = _issue_tokens(user)
     resp = Response({"user": UserSerializer(user).data}, status=201)
     set_auth_cookies(resp, access, refresh)
@@ -191,6 +179,7 @@ def me(request):
     return Response({"user": UserSerializer(request.user).data})
 
 
+# ---------- Authenticated profile endpoints ----------
 @api_view(["PATCH"])
 @permission_classes([IsAuthenticated])
 def profile(request):
@@ -211,21 +200,47 @@ def profile(request):
 def change_email(request):
     ser = ChangeEmailSerializer(data=request.data)
     ser.is_valid(raise_exception=True)
-    if not request.user.email:
+
+    # The code should have been sent to the current email (or new? Usually current)
+    current_email = request.user.email
+    if not current_email:
         return _error_response("missing_email", _("User email is not set."), 400)
 
-    ok, reason = _verify_and_consume_code(request.user.email.lower(), "change_email", ser.validated_data["code"])
+    ok, reason = _verify_and_consume_code(current_email, "change_email", ser.validated_data["code"])
     if not ok:
-        status_code = 429 if reason == "locked" else 400
-        return _error_response("invalid_code", _("Invalid or expired code."), status_code)
+        status_map = {"missing": 400, "expired": 400, "invalid": 400, "locked": 429}
+        return _error_response("invalid_code", _("Invalid or expired code."), status_map.get(reason, 400))
 
     new_email = ser.validated_data["new_email"].strip().lower()
-    if _is_email_registered(new_email, excluded_user_id=request.user.pk):
-        return _error_response("email_exists", _("User with this email already exists."), 400)
+    if User.objects.filter(email__iexact=new_email).exclude(pk=request.user.pk).exists():
+        return _error_response("email_exists", _("Email already in use."), 400)
 
     request.user.email = new_email
     request.user.save(update_fields=["email"])
     return Response({"user": UserSerializer(request.user).data})
+
+
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def change_password(request):
+    ser = ChangePasswordSerializer(data=request.data)
+    ser.is_valid(raise_exception=True)
+
+    current_email = request.user.email
+    if not current_email:
+        return _error_response("missing_email", _("User email is not set."), 400)
+
+    ok, reason = _verify_and_consume_code(current_email, "change_password", ser.validated_data["code"])
+    if not ok:
+        status_map = {"missing": 400, "expired": 400, "invalid": 400, "locked": 429}
+        return _error_response("invalid_code", _("Invalid or expired code."), status_map.get(reason, 400))
+
+    request.user.set_password(ser.validated_data["new_password"])
+    request.user.save(update_fields=["password"])
+    # Invalidate tokens by clearing cookies
+    resp = Response({"ok": True})
+    clear_auth_cookies(resp)
+    return resp
 
 
 @api_view(["POST"])
@@ -236,28 +251,8 @@ def change_phone(request):
 
     new_phone = ser.validated_data.get("new_phone")
     if new_phone and User.objects.filter(phone=new_phone).exclude(pk=request.user.pk).exists():
-        return _error_response("phone_exists", _("User with this phone already exists."), 400)
+        return _error_response("phone_exists", _("Phone already in use."), 400)
 
     request.user.phone = new_phone
     request.user.save(update_fields=["phone"])
     return Response({"user": UserSerializer(request.user).data})
-
-
-@api_view(["POST"])
-@permission_classes([IsAuthenticated])
-def change_password(request):
-    ser = ChangePasswordSerializer(data=request.data)
-    ser.is_valid(raise_exception=True)
-    if not request.user.email:
-        return _error_response("missing_email", _("User email is not set."), 400)
-
-    ok, reason = _verify_and_consume_code(request.user.email.lower(), "change_password", ser.validated_data["code"])
-    if not ok:
-        status_code = 429 if reason == "locked" else 400
-        return _error_response("invalid_code", _("Invalid or expired code."), status_code)
-
-    request.user.set_password(ser.validated_data["new_password"])
-    request.user.save(update_fields=["password"])
-    resp = Response({"ok": True})
-    clear_auth_cookies(resp)
-    return resp

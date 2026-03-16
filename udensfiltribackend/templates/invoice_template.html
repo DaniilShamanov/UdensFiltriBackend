@@ -1,0 +1,12 @@
+<h2>Thank you for your order, {{ order.customer_name }}!</h2>
+<p>Order #{{ order.id }}</p>
+<p>Date: {{ order.created_at|date }}</p>
+
+<h3>Items:</h3>
+<ul>
+{% for item in order.items %}
+    <li>{{ item.title }} x {{ item.qty }} – €{{ item.unit_price_cents|floatformat:2 }}</li>
+{% endfor %}
+</ul>
+
+<p><strong>Total: €{{ order.total_cents|floatformat:2 }}</strong></p>

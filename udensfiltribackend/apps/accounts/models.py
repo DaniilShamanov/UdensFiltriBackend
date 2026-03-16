@@ -74,6 +74,7 @@ class EmailCode(models.Model):
         ("register", "register"),
         ("change_email", "change_email"),
         ("change_password", "change_password"),
+        ("reset_password", "reset_password"),
     ]
 
     email = models.EmailField()
