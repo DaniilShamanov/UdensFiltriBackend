@@ -1,26 +1,44 @@
 from rest_framework import serializers
-
 from apps.accounts.models import GroupDiscount
-from apps.catalog.models import Product, Service
+from apps.catalog.models import Product   # Service import removed
 from .models import DeliveryOption, Order
 
 
 class DeliveryOptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = DeliveryOption
-        fields = ("id", "name", "description", "price_cents", "currency")
+        fields = ("id", "name", "description", "price_cents")
+
+
+class OrderItemSerializer(serializers.Serializer):
+    """Transform stored item dict for API output – products only."""
+    product_id = serializers.IntegerField()  # required, no longer optional
+    name = serializers.CharField()
+    quantity = serializers.IntegerField()
+    unit_price = serializers.SerializerMethodField()
+
+    def get_unit_price(self, obj):
+        return obj.get('price_cents', 0) / 100
+
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
+        data.pop('price_cents', None)
+        # type is always 'product' now, so you can add it or omit
+        data['type'] = 'product'
+        return data
 
 
 class OrderSerializer(serializers.ModelSerializer):
     delivery_option = DeliveryOptionSerializer(read_only=True)
+    items = serializers.SerializerMethodField()
+    total_price = serializers.SerializerMethodField()
 
     class Meta:
         model = Order
         fields = (
             "id",
             "status",
-            "currency",
-            "total_cents",
+            "total_price",
             "items",
             "email",
             "customer_name",
@@ -30,14 +48,27 @@ class OrderSerializer(serializers.ModelSerializer):
             "updated_at",
         )
 
+    def get_items(self, obj):
+        raw_items = obj.items or []
+        product_items = []
+        for item in raw_items:
+            if item.get('product_id') and item.get('name') is not None and item.get('quantity'):
+                if 'price_cents' not in item:
+                    item['price_cents'] = 0
+                product_items.append(item)
+        return OrderItemSerializer(product_items, many=True).data
+
+    def get_total_price(self, obj):
+        return obj.total_cents / 100
+
 
 class CreateCheckoutSerializer(serializers.Serializer):
-    items = serializers.ListField(child=serializers.DictField(), allow_empty=False)
-    currency = serializers.CharField(required=False)
     email = serializers.EmailField(required=True)
+    phone = serializers.CharField(required=False, allow_blank=True, default='')
     customer_name = serializers.CharField(required=True, max_length=200)
     customer_address = serializers.CharField(required=True, max_length=500)
     delivery_option_id = serializers.IntegerField(required=True)
+    items = serializers.ListField(child=serializers.DictField(), allow_empty=False)
 
     def _resolve_discount(self):
         req = self.context.get("request")
@@ -45,8 +76,6 @@ class CreateCheckoutSerializer(serializers.Serializer):
         if not user or not user.is_authenticated:
             return 0
         try:
-            # Use double underscore to follow the ForeignKey from GroupDiscount to Group,
-            # and then from Group to User (assuming a ManyToMany or ForeignKey)
             result = (
                 GroupDiscount.objects.filter(group__user=user, is_active=True)
                 .order_by("-percentage")
@@ -54,99 +83,59 @@ class CreateCheckoutSerializer(serializers.Serializer):
                 .first()
             )
             return int(result or 0)
-        except Exception as e:
-            # Log the error (optional) and fall back to 0
+        except Exception:
             return 0
 
     def validate_delivery_option_id(self, value):
         try:
             return DeliveryOption.objects.get(id=value, is_active=True)
-        except DeliveryOption.DoesNotExist as exc:
-            raise serializers.ValidationError("Invalid delivery option") from exc
+        except DeliveryOption.DoesNotExist:
+            raise serializers.ValidationError("Invalid delivery option")
 
     def validate_items(self, items):
         normalized_items = []
-        total = 0
-        currency = None
-        discount_pct = self._resolve_discount()
+        total_cents = 0
+        discount_percent = self._resolve_discount()
 
-        product_ids = [int(it["product_id"]) for it in items if it.get("product_id")]
-        service_ids = [int(it["service_id"]) for it in items if it.get("service_id")]
+        product_ids = []
+        for raw in items:
+            pid = raw.get("product_id")
+            if not pid:
+                raise serializers.ValidationError("Each item must have product_id")
+            product_ids.append(int(pid))
 
         products = Product.objects.filter(id__in=product_ids, is_active=True)
-        services = Service.objects.filter(id__in=service_ids, is_active=True)
         product_map = {obj.id: obj for obj in products}
-        service_map = {obj.id: obj for obj in services}
 
         for raw in items:
-            qty = int(raw.get("qty", 1))
-            if qty <= 0:
-                raise serializers.ValidationError("Invalid item quantity")
+            quantity = raw.get("quantity")
+            if not quantity or quantity <= 0:
+                raise serializers.ValidationError("Quantity must be a positive integer")
 
-            product_id = raw.get("product_id")
-            service_id = raw.get("service_id")
-            if bool(product_id) == bool(service_id):
-                raise serializers.ValidationError("Each item must contain exactly one of product_id or service_id")
+            product_id = int(raw["product_id"])
+            obj = product_map.get(product_id)
+            if not obj:
+                raise serializers.ValidationError(f"Invalid product ID {product_id}")
 
-            if product_id:
-                obj = product_map.get(int(product_id))
-                if not obj:
-                    raise serializers.ValidationError("Invalid product")
-                name = obj.name
-                base_unit_price_cents = obj.price_cents
-                item_currency = obj.currency
-                item_type = "product"
-                item_ref = {"product_id": obj.id}
-            else:
-                obj = service_map.get(int(service_id))
-                if not obj:
-                    raise serializers.ValidationError("Invalid service")
-                name = obj.name
-                base_unit_price_cents = obj.base_price_cents
-                item_currency = obj.currency
-                item_type = "service"
-                item_ref = {"service_id": obj.id}
+            final_price_cents = obj.price_cents
+            if discount_percent > 0:
+                final_price_cents = (obj.price_cents * (100 - discount_percent)) // 100
 
-            discounted_unit_price_cents = base_unit_price_cents
-            if discount_pct > 0:
-                discounted_unit_price_cents = (base_unit_price_cents * (100 - discount_pct)) // 100
+            normalized_items.append({
+                "product_id": obj.id,
+                "name": obj.name,
+                "quantity": quantity,
+                "price_cents": final_price_cents,
+                "type": "product",
+            })
 
-            normalized_items.append(
-                {
-                    "type": item_type,
-                    **item_ref,
-                    "name": name,
-                    "qty": qty,
-                    "base_unit_price_cents": base_unit_price_cents,
-                    "unit_price_cents": discounted_unit_price_cents,
-                    "discount_percent": discount_pct,
-                }
-            )
+            total_cents += quantity * final_price_cents
 
-            if currency is None:
-                currency = item_currency
-            elif currency != item_currency:
-                raise serializers.ValidationError("All items must use the same currency")
-
-            total += qty * discounted_unit_price_cents
-
-        self.context["items_total_cents"] = total
-        self.context["currency"] = currency or "EUR"
-
+        self.context["items_total_cents"] = total_cents
         return normalized_items
 
     def validate(self, attrs):
-        requested_currency = attrs.get("currency")
-        resolved_currency = self.context.get("currency", "EUR")
-        if requested_currency and requested_currency.upper() != resolved_currency.upper():
-            raise serializers.ValidationError({"currency": "Currency mismatch with selected catalog items"})
-
         delivery_option = attrs["delivery_option_id"]
-        if delivery_option.currency.upper() != resolved_currency.upper():
-            raise serializers.ValidationError({"delivery_option_id": "Delivery currency does not match cart currency"})
-
-        attrs["currency"] = resolved_currency
         attrs["delivery_option"] = delivery_option
         attrs["total_cents"] = self.context.get("items_total_cents", 0) + delivery_option.price_cents
-
         return attrs

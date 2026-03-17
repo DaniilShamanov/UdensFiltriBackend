@@ -12,8 +12,8 @@ def send_invoice_email(order):
         # Prepare context for templates
         context = {
             'order': order,
-            'items': order.items,          # list of dicts with title, qty, unit_price_cents
-            'total': order.total_cents / 100,  # convert cents to main currency unit
+            'items': order.items,
+            'total': order.total_cents / 100,
         }
 
         # Render HTML template and generate plain text version

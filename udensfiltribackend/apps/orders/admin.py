@@ -15,15 +15,15 @@ def mark_cancelled(modeladmin, request, queryset):
 
 @admin.register(DeliveryOption)
 class DeliveryOptionAdmin(admin.ModelAdmin):
-    list_display = ("id", "name", "price_cents", "currency", "is_active")
-    list_filter = ("currency", "is_active")
+    list_display = ("id", "name", "price_cents", "is_active")
+    list_filter = ("is_active",)
     search_fields = ("name", "description")
 
 
 @admin.register(Order)
 class OrderAdmin(admin.ModelAdmin):
-    list_display = ("id", "user", "email", "customer_name", "status", "total_cents", "currency", "created_at")
-    list_filter = ("status", "currency", "created_at")
+    list_display = ("id", "user", "email", "customer_name", "status", "total_cents", "created_at")
+    list_filter = ("status", "created_at")
     search_fields = (
         "id",
         "user__phone",
