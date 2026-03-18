@@ -6,7 +6,7 @@ from .serializers import CategorySerializer, ProductSerializer, ServiceSerialize
 
 
 class ProductPagination(PageNumberPagination):
-    page_size = 12
+    page_size = 20
     page_size_query_param = "page_size"
     max_page_size = 100
 
@@ -21,12 +21,17 @@ class ProductViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Product.objects.filter(is_active=True).order_by("name")
     serializer_class = ProductSerializer
     permission_classes = [permissions.AllowAny]
-    lookup_field = "slug"
+    lookup_field = "pk"
     pagination_class = ProductPagination
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context.update({"request": self.request})
+        return context
 
 
 class ServiceViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = Service.objects.filter(is_active=True).order_by("name")
     serializer_class = ServiceSerializer
     permission_classes = [permissions.AllowAny]
-    lookup_field = "slug"
+    lookup_field = "pk"  # Optional: if services are also accessed by ID

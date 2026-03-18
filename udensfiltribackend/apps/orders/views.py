@@ -7,6 +7,7 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
+from rest_framework.pagination import PageNumberPagination
 
 from .utils import send_invoice_email
 from .models import DeliveryOption, Order
@@ -18,6 +19,11 @@ from .serializers import (
 
 logger = logging.getLogger(__name__)
 stripe.api_key = settings.STRIPE_SECRET_KEY
+
+class OrderPagination(PageNumberPagination):
+    page_size = 10
+    page_size_query_param = 'page_size'
+    max_page_size = 100
 
 
 @api_view(["GET"])
@@ -132,8 +138,10 @@ def list_orders(request):
     if not request.user.is_superuser:
         qs = qs.filter(user=request.user)
 
-    serializer = OrderSerializer(qs, many=True)
-    return Response(serializer.data)
+    paginator = OrderPagination()
+    page = paginator.paginate_queryset(qs, request)
+    serializer = OrderSerializer(page, many=True)
+    return paginator.get_paginated_response(serializer.data)
 
 
 @api_view(["GET"])

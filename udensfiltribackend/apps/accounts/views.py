@@ -78,6 +78,19 @@ def send_code(request):
     if not email or not purpose:
         return _error_response("missing_fields", _("Email and purpose are required."), 400)
 
+    # Cooldown check: at least 2 minutes between requests
+    min_interval = getattr(settings, 'EMAIL_CODE_MIN_INTERVAL_SECONDS', 120)
+    last_code = EmailCode.objects.filter(email=email, purpose=purpose).order_by('-created_at').first()
+    if last_code:
+        elapsed = (timezone.now() - last_code.created_at).total_seconds()
+        if elapsed < min_interval:
+            wait = int(min_interval - elapsed)
+            return _error_response(
+                "too_many_requests",
+                _(f"Please wait {wait} seconds before requesting a new code."),
+                429
+            )
+
     # Optionally, check if email already exists for register purpose
     if purpose == "register" and User.objects.filter(email__iexact=email).exists():
         return _error_response("email_exists", _("Email already registered."), 400)
@@ -97,8 +110,6 @@ def send_code(request):
 
     # Send email using your utility
     send_verification_email(email, code, purpose)
-
-    print(123)
 
     return Response({"message": _("Verification code sent.")})
 
@@ -179,7 +190,6 @@ def me(request):
     return Response({"user": UserSerializer(request.user).data})
 
 
-# ---------- Authenticated profile endpoints ----------
 @api_view(["PATCH"])
 @permission_classes([IsAuthenticated])
 def profile(request):
