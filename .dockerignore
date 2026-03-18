@@ -1,0 +1,12 @@
+.git
+.gitignore
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+*.sqlite3
+.env
+.venv
+venv
+node_modules
+postgres_data

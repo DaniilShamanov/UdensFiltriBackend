@@ -7,16 +7,22 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 def env(name, default=None):
     return os.environ.get(name, default)
 
-SECRET_KEY = env("DJANGO_SECRET_KEY", "dev-secret-key")
-DEBUG = env("DJANGO_DEBUG", "1") == "1"
+SECRET_KEY = env("DJANGO_SECRET_KEY", "")
+DEBUG = env("DJANGO_DEBUG", "0") == "1"
+
+if not SECRET_KEY:
+    if DEBUG:
+        SECRET_KEY = "dev-secret-key"
+    else:
+        raise RuntimeError("DJANGO_SECRET_KEY must be set when DJANGO_DEBUG=0")
 
 # Latvia / production hosting notes:
 # - areait.lv typically runs behind Nginx; enable proxy SSL header
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 SECURE_SSL_REDIRECT = env("DJANGO_SECURE_SSL_REDIRECT", "0") == "1"
-SESSION_COOKIE_SECURE = env("DJANGO_SESSION_COOKIE_SECURE", "0") == "1"
-CSRF_COOKIE_SECURE = env("DJANGO_CSRF_COOKIE_SECURE", "0") == "1"
-SECURE_HSTS_SECONDS = int(env("DJANGO_SECURE_HSTS_SECONDS", "0"))
+SESSION_COOKIE_SECURE = env("DJANGO_SESSION_COOKIE_SECURE", "1") == "1"
+CSRF_COOKIE_SECURE = env("DJANGO_CSRF_COOKIE_SECURE", "1") == "1"
+SECURE_HSTS_SECONDS = int(env("DJANGO_SECURE_HSTS_SECONDS", "31536000"))
 SECURE_HSTS_INCLUDE_SUBDOMAINS = env("DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS", "0") == "1"
 SECURE_HSTS_PRELOAD = env("DJANGO_SECURE_HSTS_PRELOAD", "0") == "1"
 SECURE_REFERRER_POLICY = "strict-origin-when-cross-origin"
@@ -34,6 +40,7 @@ INSTALLED_APPS = [
     "django.contrib.staticfiles",
     "corsheaders",
     "rest_framework",
+    "rest_framework_simplejwt.token_blacklist",
     "apps.accounts",
     "apps.catalog",
     "apps.cases",
@@ -45,6 +52,7 @@ MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
+    "django.middleware.locale.LocaleMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
@@ -68,16 +76,25 @@ TEMPLATES = [{
 
 WSGI_APPLICATION = "config.wsgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": env("DB_NAME", "UdensFiltri"),
-        "USER": env("DB_USER", "postgres"),
-        "PASSWORD": env("DB_PASSWORD", ""),
-        "HOST": env("DB_HOST", "localhost"),
-        "PORT": env("DB_PORT", "5433")
+DB_ENGINE = env("DB_ENGINE", "django.db.backends.postgresql")
+if DB_ENGINE == "django.db.backends.sqlite3":
+    DATABASES = {
+        "default": {
+            "ENGINE": DB_ENGINE,
+            "NAME": env("DB_NAME", str(BASE_DIR / "db.sqlite3")),
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": DB_ENGINE,
+            "NAME": env("DB_NAME", "UdensFiltri"),
+            "USER": env("DB_USER", "postgres"),
+            "PASSWORD": env("DB_PASSWORD", ""),
+            "HOST": env("DB_HOST", "localhost"),
+            "PORT": env("DB_PORT", "5432")
+        }
+    }
 
 AUTH_USER_MODEL = "accounts.User"
 
@@ -89,6 +106,8 @@ AUTH_PASSWORD_VALIDATORS = [
 ]
 
 LANGUAGE_CODE = "lv"
+LANGUAGES = (("lv", "Latviešu"), ("en", "English"))
+LOCALE_PATHS = [BASE_DIR / "locale"]
 TIME_ZONE = "Europe/Riga"
 USE_I18N = True
 USE_TZ = True
@@ -105,9 +124,10 @@ CSRF_TRUSTED_ORIGINS = [o for o in FRONTEND_ORIGINS if o.startswith("https://") 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": ("apps.accounts.auth.CookieJWTAuthentication",),
     "DEFAULT_PERMISSION_CLASSES": ("rest_framework.permissions.IsAuthenticatedOrReadOnly",),
+    "EXCEPTION_HANDLER": "config.api_errors.custom_exception_handler",
     "DEFAULT_THROTTLE_RATES": {
-        "code_ip": env("CODE_THROTTLE_IP", env("SMS_THROTTLE_IP", "10/min")),
-        "code_email": env("CODE_THROTTLE_EMAIL", env("SMS_THROTTLE_PHONE", "3/min")),
+        "code_ip": env("CODE_THROTTLE_IP", "10/min"),
+        "code_email": env("CODE_THROTTLE_EMAIL", "3/min"),
     },
 }
 
@@ -115,12 +135,12 @@ SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=1),
     "REFRESH_TOKEN_LIFETIME": timedelta(minutes=3),
     "ROTATE_REFRESH_TOKENS": True,
-    "BLACKLIST_AFTER_ROTATION": False,
+    "BLACKLIST_AFTER_ROTATION": True,
     "AUTH_HEADER_TYPES": ("Bearer",),
 }
 
 AUTH_COOKIE_DOMAIN = env("AUTH_COOKIE_DOMAIN", "") or None
-AUTH_COOKIE_SECURE = env("AUTH_COOKIE_SECURE", "0") == "1"
+AUTH_COOKIE_SECURE = env("AUTH_COOKIE_SECURE", "1") == "1"
 AUTH_COOKIE_SAMESITE = env("AUTH_COOKIE_SAMESITE", "Lax")
 AUTH_COOKIE_ACCESS_NAME = "access"
 AUTH_COOKIE_REFRESH_NAME = "refresh"
@@ -129,8 +149,52 @@ STRIPE_SECRET_KEY = env("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = env("STRIPE_WEBHOOK_SECRET", "")
 FRONTEND_BASE_URL = env("FRONTEND_BASE_URL", "http://localhost:3000")
 
-EMAIL_BACKEND = env("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+SENDGRID_API_KEY = env("SENDGRID_API_KEY", "")
+if SENDGRID_API_KEY:
+    EMAIL_BACKEND = env("EMAIL_BACKEND", "config.email_backends.SendGridEmailBackend")
+else:
+    EMAIL_BACKEND = env("EMAIL_BACKEND", "django.core.mail.backends.console.EmailBackend")
+
 DEFAULT_FROM_EMAIL = env("DEFAULT_FROM_EMAIL", "no-reply@example.com")
 ADMIN_NOTIFICATION_EMAILS = [e.strip() for e in env("ADMIN_NOTIFICATION_EMAILS", "").split(",") if e.strip()]
 
-EMAIL_CODE_MIN_INTERVAL_SECONDS = int(env("EMAIL_CODE_MIN_INTERVAL_SECONDS", env("SMS_MIN_INTERVAL_SECONDS", "60")))
+EMAIL_CODE_MIN_INTERVAL_SECONDS = int(env("EMAIL_CODE_MIN_INTERVAL_SECONDS", "60"))
+EMAIL_CODE_MOCK_MODE = env("EMAIL_CODE_MOCK_MODE", "1" if DEBUG else "0") == "1"
+
+
+LOG_DIR = BASE_DIR / "logs"
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+LOGGING_HANDLER = {
+    "level": "INFO",
+    "class": "logging.handlers.TimedRotatingFileHandler",
+    "filename": str(LOG_DIR / "backend.log"),
+    "when": "midnight",
+    "backupCount": 30,
+    "formatter": "verbose",
+    "encoding": "utf-8",
+}
+
+if os.name == "nt":
+    LOGGING_HANDLER = {
+        "level": "INFO",
+        "class": "logging.FileHandler",
+        "filename": str(LOG_DIR / "backend.log"),
+        "formatter": "verbose",
+        "encoding": "utf-8",
+    }
+
+LOGGING = {
+    "version": 1,
+    "disable_existing_loggers": False,
+    "formatters": {
+        "verbose": {
+            "format": "%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        }
+    },
+    "handlers": {"daily_file": LOGGING_HANDLER},
+    "root": {
+        "handlers": ["daily_file"],
+        "level": "INFO",
+    },
+}
