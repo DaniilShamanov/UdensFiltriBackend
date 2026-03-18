@@ -10,6 +10,8 @@ services:
       - "${DB_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - udensfiltri_net
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-UdensFiltri}"]
       interval: 10s
@@ -31,6 +33,17 @@ services:
         condition: service_healthy
     ports:
       - "8000:8000"
+    networks:
+      - udensfiltri_net
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/admin/login/', timeout=3)\" >/dev/null 2>&1 || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
 
 volumes:
   postgres_data:
+
+networks:
+  udensfiltri_net:
+    name: udensfiltri_net

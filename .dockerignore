@@ -6,7 +6,11 @@ __pycache__
 *.pyd
 *.sqlite3
 .env
-.venv
-venv
-node_modules
-postgres_data
+.env.*
+venv/
+.venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+udensfiltribackend/logs/
+udensfiltribackend/staticfiles/

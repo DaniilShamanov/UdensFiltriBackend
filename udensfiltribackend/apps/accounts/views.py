@@ -1,4 +1,3 @@
-import random
 from datetime import timedelta
 
 from django.conf import settings
@@ -23,7 +22,7 @@ from .serializers import (
     RegisterSerializer,
     UserSerializer,
 )
-from .utils import send_email, send_verification_email
+from .utils import create_email_code, send_verification_email
 
 def _error_response(code, message, status_code, fields=None):
     payload = {"error": {"code": code, "message": message}}
@@ -78,38 +77,24 @@ def send_code(request):
     if not email or not purpose:
         return _error_response("missing_fields", _("Email and purpose are required."), 400)
 
-    # Cooldown check: at least 2 minutes between requests
-    min_interval = getattr(settings, 'EMAIL_CODE_MIN_INTERVAL_SECONDS', 120)
-    last_code = EmailCode.objects.filter(email=email, purpose=purpose).order_by('-created_at').first()
-    if last_code:
-        elapsed = (timezone.now() - last_code.created_at).total_seconds()
-        if elapsed < min_interval:
-            wait = int(min_interval - elapsed)
-            return _error_response(
-                "too_many_requests",
-                _(f"Please wait {wait} seconds before requesting a new code."),
-                429
-            )
-
     # Optionally, check if email already exists for register purpose
     if purpose == "register" and User.objects.filter(email__iexact=email).exists():
         return _error_response("email_exists", _("Email already registered."), 400)
 
-    # Invalidate any previous unused codes for this email/purpose
-    EmailCode.objects.filter(email=email, purpose=purpose, consumed_at__isnull=True).update(
-        consumed_at=timezone.now()
-    )
+    try:
+        code_record = create_email_code(email=email, purpose=purpose, ttl_minutes=10)
+    except ValueError:
+        min_interval = getattr(settings, "EMAIL_CODE_MIN_INTERVAL_SECONDS", 60)
+        last_code = EmailCode.objects.filter(email=email, purpose=purpose).order_by("-created_at").first()
+        elapsed = (timezone.now() - last_code.created_at).total_seconds() if last_code else 0
+        wait = max(int(min_interval - elapsed), 1)
+        return _error_response(
+            "too_many_requests",
+            _(f"Please wait {wait} seconds before requesting a new code."),
+            429,
+        )
 
-    code = f"{random.randint(0, 999999):06d}"
-    EmailCode.objects.create(
-        email=email,
-        purpose=purpose,
-        code=code,
-        expires_at=timezone.now() + timedelta(minutes=10),
-    )
-
-    # Send email using your utility
-    send_verification_email(email, code, purpose)
+    send_verification_email(email, code_record.code, purpose)
 
     return Response({"message": _("Verification code sent.")})
 
